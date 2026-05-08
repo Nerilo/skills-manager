@@ -736,6 +736,7 @@
   },
   "globalWorkspace": {
     "title": "Global Workspace",
+    "allAgents": "All Agents",
     "subtitle": "Skills installed globally for each agent",
     "skillCount": "{{count}} skills",
     "addSkill": "Add Skill",

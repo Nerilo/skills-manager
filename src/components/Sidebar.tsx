@@ -486,17 +486,36 @@ export function Sidebar() {
                 {t("sidebar.globalWorkspace")}
               </span>
             </button>
-            <Link
-              to="/global-workspace"
-              className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-secondary"
-              title={t("sidebar.globalWorkspace")}
-            >
-              <Globe className="h-3.5 w-3.5" />
-            </Link>
           </div>
 
           {globalWorkspaceOpen && (
-            orderedTools.length === 0 ? (
+            <>
+              {/* Pinned overview item */}
+              {(() => {
+                const isActive = location.pathname === "/global-workspace";
+                return (
+                  <Link
+                    to="/global-workspace"
+                    className={cn(
+                      "mb-0.5 flex items-center gap-2 px-2.5 py-[7px] rounded-[5px] text-[13px] transition-colors outline-none",
+                      isActive
+                        ? "bg-surface-active font-medium text-primary"
+                        : "text-tertiary hover:text-secondary hover:bg-surface-hover"
+                    )}
+                  >
+                    <span className={cn(
+                      "flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded border",
+                      isActive
+                        ? "border-accent/30 bg-accent/10 text-accent"
+                        : "border-border bg-surface text-muted"
+                    )}>
+                      <Globe className="h-3 w-3" />
+                    </span>
+                    <span className="flex-1 truncate">{t("globalWorkspace.allAgents")}</span>
+                  </Link>
+                );
+              })()}
+              {orderedTools.length === 0 ? (
               <p className="px-5 py-1.5 text-[12px] text-faint">{t("globalWorkspace.noAgents")}</p>
             ) : (
               <DragDropContext onDragEnd={handleToolDragEnd}>
@@ -569,7 +588,8 @@ export function Sidebar() {
                   )}
                 </Droppable>
               </DragDropContext>
-            )
+            )}
+          </>
           )}
         </div>
 

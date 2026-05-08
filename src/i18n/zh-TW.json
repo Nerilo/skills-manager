@@ -668,6 +668,7 @@
   },
   "globalWorkspace": {
     "title": "全域工作區",
+    "allAgents": "全部 Agents",
     "subtitle": "各 Agent 目前全域安裝的 Skills",
     "skillCount": "{{count}} 個 Skills",
     "addSkill": "加入 Skill",
