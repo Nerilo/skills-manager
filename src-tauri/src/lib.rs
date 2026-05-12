@@ -385,6 +385,8 @@ pub fn run() {
             commands::tools::get_tool_status,
             commands::tools::set_tool_enabled,
             commands::tools::set_all_tools_enabled,
+            commands::tools::get_tool_order_cmd,
+            commands::tools::set_tool_order_cmd,
             commands::tools::set_custom_tool_path,
             commands::tools::reset_custom_tool_path,
             commands::tools::set_custom_tool_project_path,

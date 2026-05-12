@@ -194,7 +194,7 @@ function SkillDetailPanelContent({
   const meta = (
     <>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
-        {tools && <SyncDots skill={skill} tools={tools} size="sm" />}
+        {tools && <SyncDots skill={skill} tools={tools} size="sm" includeOrphan />}
         {skill.tags.length > 0 && (
           <>
             {tools && <span className="mx-0.5 h-3 w-px bg-border-subtle" />}

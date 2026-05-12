@@ -10,9 +10,9 @@ use crate::core::skill_store::SkillStore;
 use crate::core::sync_engine;
 use crate::core::tool_adapters::{self, CustomToolDef};
 use crate::core::tool_service::{
-    self, ToolInfo, get_custom_tool_paths, get_custom_tools, get_disabled_tools,
+    self, ToolInfo, get_custom_tool_paths, get_custom_tools, get_disabled_tools, get_tool_order,
     normalize_project_relative_skills_dir_input, normalize_skills_dir_input, set_custom_tool_paths,
-    set_custom_tools, set_disabled_tools,
+    set_custom_tools, set_disabled_tools, set_tool_order,
 };
 
 #[derive(Debug, Serialize)]
@@ -123,6 +123,23 @@ pub async fn set_all_tools_enabled(
         }
     })
     .await?
+}
+
+#[tauri::command]
+pub async fn get_tool_order_cmd(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<String>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(get_tool_order(&store))).await?
+}
+
+#[tauri::command]
+pub async fn set_tool_order_cmd(
+    order: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || set_tool_order(&store, &order)).await?
 }
 
 #[tauri::command]

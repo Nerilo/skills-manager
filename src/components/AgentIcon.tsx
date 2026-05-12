@@ -55,6 +55,10 @@ function getAgentIconSrc(agentKey: string): string | null {
   return file ? `/agent-icons/${file}` : null;
 }
 
+export function hasAgentIcon(agentKey: string): boolean {
+  return Boolean(AGENT_ICON_FILES[agentKey]);
+}
+
 interface AgentIconProps {
   agentKey: string;
   displayName?: string;

@@ -27,7 +27,23 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  GripVertical,
 } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  arrayMove,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -39,6 +55,7 @@ import { useThemeContext } from "../context/ThemeContext";
 import { AgentIcon } from "../components/AgentIcon";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
+import { getErrorMessage } from "../lib/error";
 import type { AppUpdateInfo } from "../lib/tauri";
 import type { Theme } from "../hooks/useTheme";
 
@@ -62,6 +79,79 @@ function compactHomePath(path: string) {
     .replace(/\/Users\/[^/]+/, "~")
     .replace(/\/home\/[^/]+/, "~")
     .replace(/^[A-Za-z]:\\Users\\[^\\]+/, "~");
+}
+
+interface SortableAgentCardProps {
+  agentKey: string;
+  dragLabel: string;
+  children: (dragHandle: React.ReactNode) => React.ReactNode;
+}
+
+function SortableAgentCard({ agentKey, dragLabel, children }: SortableAgentCardProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: agentKey });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : undefined,
+  };
+
+  const handle = (
+    <button
+      type="button"
+      ref={setActivatorNodeRef}
+      {...listeners}
+      onClick={(e) => e.stopPropagation()}
+      className="mt-0.5 flex shrink-0 cursor-grab items-center justify-center rounded text-faint outline-none transition-colors hover:text-muted active:cursor-grabbing"
+      title={dragLabel}
+      aria-label={dragLabel}
+    >
+      <GripVertical className="h-3.5 w-3.5" />
+    </button>
+  );
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes}>
+      {children(handle)}
+    </div>
+  );
+}
+
+interface AgentGroupDndProps {
+  items: api.ToolInfo[];
+  sensors: ReturnType<typeof useSensors>;
+  dragLabel: string;
+  onDragEnd: (event: DragEndEvent, groupKeys: string[]) => void;
+  renderAgentCard: (agent: api.ToolInfo, dragHandle?: React.ReactNode) => React.ReactNode;
+}
+
+function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }: AgentGroupDndProps) {
+  const groupKeys = items.map((t) => t.key);
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={(e) => onDragEnd(e, groupKeys)}
+    >
+      <SortableContext items={groupKeys} strategy={rectSortingStrategy}>
+        <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2 xl:grid-cols-3">
+          {items.map((agent) => (
+            <SortableAgentCard key={agent.key} agentKey={agent.key} dragLabel={dragLabel}>
+              {(handle) => renderAgentCard(agent, handle)}
+            </SortableAgentCard>
+          ))}
+        </div>
+      </SortableContext>
+    </DndContext>
+  );
 }
 
 export function Settings() {
@@ -482,32 +572,48 @@ export function Settings() {
   );
   const customTools = useMemo(() => tools.filter((tool) => tool.is_custom), [tools]);
   const builtInTools = useMemo(() => tools.filter((tool) => !tool.is_custom), [tools]);
-  const sortTools = useCallback((items: typeof tools) => {
-    return [...items].sort((a, b) => {
-      const installRank = Number(b.installed) - Number(a.installed);
-      if (installRank !== 0) return installRank;
-      const enabledRank = Number(b.enabled) - Number(a.enabled);
-      if (enabledRank !== 0) return enabledRank;
-      return a.display_name.localeCompare(b.display_name);
-    });
-  }, []);
-  const displayedBuiltInTools = useMemo(() => sortTools(builtInTools), [builtInTools, sortTools]);
-  const displayedCustomTools = useMemo(() => sortTools(customTools), [customTools, sortTools]);
   const mainstreamTools = useMemo(
-    () => displayedBuiltInTools.filter((tool) => MAINSTREAM_AGENT_KEYS.has(tool.key)),
-    [displayedBuiltInTools]
+    () => builtInTools.filter((tool) => MAINSTREAM_AGENT_KEYS.has(tool.key)),
+    [builtInTools]
   );
   const secondaryTools = useMemo(
-    () => displayedBuiltInTools.filter((tool) => !MAINSTREAM_AGENT_KEYS.has(tool.key)),
-    [displayedBuiltInTools]
+    () => builtInTools.filter((tool) => !MAINSTREAM_AGENT_KEYS.has(tool.key)),
+    [builtInTools]
+  );
+
+  const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const handleAgentDragEnd = useCallback(
+    async (event: DragEndEvent, groupKeys: string[]) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIdx = groupKeys.indexOf(String(active.id));
+      const newIdx = groupKeys.indexOf(String(over.id));
+      if (oldIdx < 0 || newIdx < 0) return;
+
+      const newGroupKeys = arrayMove(groupKeys, oldIdx, newIdx);
+      const fullOrder = tools.map((t) => t.key);
+      const groupKeySet = new Set(groupKeys);
+      let cursor = 0;
+      const newFullOrder = fullOrder.map((k) =>
+        groupKeySet.has(k) ? newGroupKeys[cursor++] : k
+      );
+
+      try {
+        await api.setToolOrder(newFullOrder);
+        await refreshTools();
+      } catch (e) {
+        toast.error(getErrorMessage(e));
+      }
+    },
+    [tools, refreshTools]
   );
   const displayedRepoPath = centralRepoPath
     ? compactHomePath(centralRepoPath)
     : t("common.loading");
 
-  const renderAgentCard = (agent: typeof tools[number]) => (
+  const renderAgentCard = (agent: typeof tools[number], dragHandle?: React.ReactNode) => (
     <div
-      key={agent.key}
       className={cn(
         "group relative flex flex-col gap-1.5 rounded-[6px] border px-3 py-2.5 transition-colors",
         agent.installed && agent.enabled
@@ -518,6 +624,7 @@ export function Settings() {
       )}
     >
       <div className="flex items-start gap-2">
+        {dragHandle}
         <div className="mt-0.5 shrink-0">
           {agent.installed ? (
             <button
@@ -840,9 +947,13 @@ export function Settings() {
                 <h3 className="text-[13px] font-medium text-secondary">{t("settings.builtInAgents")}</h3>
                 <span className="text-[12px] text-muted">{mainstreamTools.length}</span>
               </div>
-              <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-                {mainstreamTools.map(renderAgentCard)}
-              </div>
+              <AgentGroupDnd
+                items={mainstreamTools}
+                sensors={dragSensors}
+                dragLabel={t("settings.dragToReorder")}
+                onDragEnd={handleAgentDragEnd}
+                renderAgentCard={renderAgentCard}
+              />
             </div>
 
             {secondaryTools.length > 0 && (
@@ -856,22 +967,30 @@ export function Settings() {
                   {t("settings.moreAgentsSection", { count: secondaryTools.length })}
                 </button>
                 {showMoreAgents && (
-                  <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-                    {secondaryTools.map(renderAgentCard)}
-                  </div>
+                  <AgentGroupDnd
+                    items={secondaryTools}
+                    sensors={dragSensors}
+                    dragLabel={t("settings.dragToReorder")}
+                    onDragEnd={handleAgentDragEnd}
+                    renderAgentCard={renderAgentCard}
+                  />
                 )}
               </div>
             )}
 
-            {displayedCustomTools.length > 0 && (
+            {customTools.length > 0 && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <h3 className="text-[13px] font-medium text-secondary">{t("settings.customAgentsSection")}</h3>
-                  <span className="text-[12px] text-muted">{displayedCustomTools.length}</span>
+                  <span className="text-[12px] text-muted">{customTools.length}</span>
                 </div>
-                <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-                  {displayedCustomTools.map(renderAgentCard)}
-                </div>
+                <AgentGroupDnd
+                  items={customTools}
+                  sensors={dragSensors}
+                  dragLabel={t("settings.dragToReorder")}
+                  onDragEnd={handleAgentDragEnd}
+                  renderAgentCard={renderAgentCard}
+                />
               </div>
             )}
           </div>

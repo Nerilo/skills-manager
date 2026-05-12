@@ -381,6 +381,7 @@
     "disableAgent": "禁用此 Agent",
     "editPath": "编辑路径",
     "resetPath": "恢复默认",
+    "dragToReorder": "拖动调整顺序",
     "pathOverridden": "自定义路径",
     "customAgent": "自定义",
     "addCustomAgent": "新增 Agent",

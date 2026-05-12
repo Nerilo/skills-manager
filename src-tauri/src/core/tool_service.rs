@@ -28,6 +28,62 @@ pub fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
         .unwrap_or_default()
 }
 
+const DEFAULT_PRIORITY_ORDER: &[&str] = &[
+    "claude_code",
+    "codex",
+    "gemini_cli",
+    "cursor",
+    "opencode",
+    "hermes",
+];
+
+pub fn get_tool_order(store: &SkillStore) -> Vec<String> {
+    store
+        .get_setting("tool_order")
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+        .unwrap_or_default()
+}
+
+pub fn set_tool_order(store: &SkillStore, order: &[String]) -> Result<(), AppError> {
+    let json = serde_json::to_string(order)
+        .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
+    store.set_setting("tool_order", &json).map_err(AppError::db)
+}
+
+/// Merge a saved tool order with the actual list of available tool keys.
+/// - Keeps saved entries in their saved order (filtering out keys that no longer exist).
+/// - If saved is empty, seeds with the built-in default priority list.
+/// - Appends any remaining keys (e.g. newly registered agents) at the end in
+///   their natural adapter order.
+fn merge_order(saved: &[String], all_keys: &[String]) -> Vec<String> {
+    let all_set: HashSet<&str> = all_keys.iter().map(|s| s.as_str()).collect();
+    let mut out: Vec<String> = Vec::with_capacity(all_keys.len());
+
+    for k in saved {
+        if all_set.contains(k.as_str()) && !out.iter().any(|x| x == k) {
+            out.push(k.clone());
+        }
+    }
+
+    if out.is_empty() {
+        for k in DEFAULT_PRIORITY_ORDER {
+            if all_set.contains(*k) {
+                out.push((*k).to_string());
+            }
+        }
+    }
+
+    for k in all_keys {
+        if !out.iter().any(|x| x == k) {
+            out.push(k.clone());
+        }
+    }
+
+    out
+}
+
 pub fn disabled_tools_set(store: &SkillStore) -> HashSet<String> {
     get_disabled_tools(store).into_iter().collect()
 }
@@ -119,7 +175,7 @@ pub fn normalize_project_relative_skills_dir_input(path: &str) -> Result<Option<
 
 pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
     let disabled = disabled_tools_set(store);
-    tool_adapters::all_tool_adapters(store)
+    let infos: Vec<ToolInfo> = tool_adapters::all_tool_adapters(store)
         .into_iter()
         .map(|adapter| ToolInfo {
             key: adapter.key.clone(),
@@ -138,6 +194,16 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
                 }
             },
         })
+        .collect();
+
+    let saved = get_tool_order(store);
+    let all_keys: Vec<String> = infos.iter().map(|i| i.key.clone()).collect();
+    let ordered_keys = merge_order(&saved, &all_keys);
+
+    let mut by_key: HashMap<String, ToolInfo> = infos.into_iter().map(|i| (i.key.clone(), i)).collect();
+    ordered_keys
+        .into_iter()
+        .filter_map(|k| by_key.remove(&k))
         .collect()
 }
 

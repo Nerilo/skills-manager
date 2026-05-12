@@ -1,5 +1,6 @@
 import type { ProjectAgentTarget } from "../lib/tauri";
 import { cn } from "../utils";
+import { AgentIcon, hasAgentIcon } from "./AgentIcon";
 
 function shortLabel(displayName: string, key: string): string {
   const words = displayName.trim().split(/\s+/).filter(Boolean);
@@ -53,10 +54,16 @@ export function ProjectAgentDots({ assignedAgents, agentDisplayNames = {}, targe
     ? "h-[16px] w-[16px] text-[8px]"
     : "h-[18px] w-[18px] text-[9px]";
 
-  const stateClass: Record<DotState, string> = {
+  const iconStateClass: Record<DotState, string> = {
+    synced: "bg-surface",
+    available: "bg-surface opacity-45",
+    orphan: "ring-1 ring-inset ring-amber-500/60 bg-surface",
+  };
+
+  const textStateClass: Record<DotState, string> = {
     synced: "border-transparent bg-[var(--color-text-primary)] text-[var(--color-bg)]",
-    available: "border-border-subtle bg-surface-hover text-faint",
-    orphan: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    available: "border border-border-subtle bg-surface-hover text-faint",
+    orphan: "border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   };
 
   const stateTitle: Record<DotState, string> = {
@@ -67,19 +74,29 @@ export function ProjectAgentDots({ assignedAgents, agentDisplayNames = {}, targe
 
   return (
     <div className={cn("flex items-center gap-[2px]", className)}>
-      {visible.map((dot) => (
-        <span
-          key={dot.key}
-          title={`${dot.displayName}${stateTitle[dot.state]}`}
-          className={cn(
-            "inline-flex select-none items-center justify-center rounded-[4px] border font-mono font-semibold tracking-tight transition-colors",
-            dim,
-            stateClass[dot.state],
-          )}
-        >
-          {shortLabel(dot.displayName, dot.key)}
-        </span>
-      ))}
+      {visible.map((dot) => {
+        const useIcon = hasAgentIcon(dot.key);
+        return (
+          <span
+            key={dot.key}
+            title={`${dot.displayName}${stateTitle[dot.state]}`}
+            className={cn(
+              "inline-flex select-none items-center justify-center overflow-hidden rounded-[4px] transition-colors",
+              dim,
+              useIcon ? iconStateClass[dot.state] : cn("border font-mono font-semibold tracking-tight", textStateClass[dot.state]),
+            )}
+          >
+            {useIcon ? (
+              <AgentIcon
+                agentKey={dot.key}
+                className="h-full w-full rounded-[4px] border-0 bg-transparent"
+              />
+            ) : (
+              shortLabel(dot.displayName, dot.key)
+            )}
+          </span>
+        );
+      })}
       {hiddenCount > 0 && (
         <span
           title={`+${hiddenCount} more agents`}

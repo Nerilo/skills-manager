@@ -381,6 +381,7 @@
     "disableAgent": "Disable this agent",
     "editPath": "Edit path",
     "resetPath": "Reset to default",
+    "dragToReorder": "Drag to reorder",
     "pathOverridden": "Custom path",
     "customAgent": "Custom",
     "addCustomAgent": "New Agent",
