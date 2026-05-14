@@ -12,6 +12,7 @@ use crate::core::{
     install_cancel::InstallCancelRegistry,
     installer,
     repo_lock::RepoLock,
+    scanner,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
@@ -113,7 +114,8 @@ struct GitSkillSource {
 
 #[derive(Debug, serde::Serialize)]
 pub struct GitSkillPreview {
-    pub dir_name: String,
+    /// Path relative to the resolved scan root, using `/` separators. Stable key.
+    pub rel_path: String,
     pub name: String,
     pub description: Option<String>,
 }
@@ -126,7 +128,7 @@ pub struct GitPreviewResult {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SkillInstallItem {
-    pub dir_name: String,
+    pub rel_path: String,
     pub name: String,
 }
 
@@ -451,7 +453,7 @@ pub async fn install_git(
         };
 
         emit_progress("cloning");
-        let parsed = git_fetcher::parse_git_source(&repo_url);
+        let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
         let app_for_progress = app_handle.clone();
         let url_for_progress = repo_url.clone();
         let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
@@ -631,7 +633,7 @@ pub async fn preview_git_install(
             )
             .ok();
 
-        let parsed = git_fetcher::parse_git_source(&repo_url);
+        let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
         let app_for_progress = app_handle.clone();
         let url_for_progress = repo_url.clone();
         let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
@@ -663,16 +665,17 @@ pub async fn preview_git_install(
                 .iter()
                 .map(|dir| {
                     let meta = skill_metadata::parse_skill_md(dir);
-                    let dir_name = dir
+                    let rel_path = skill_rel_key(&skill_dir, dir);
+                    let basename = dir
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
+                        .unwrap_or_else(|| rel_path.clone());
                     let name = meta
                         .name
                         .filter(|s| !s.trim().is_empty())
-                        .unwrap_or_else(|| dir_name.clone());
+                        .unwrap_or_else(|| basename.clone());
                     GitSkillPreview {
-                        dir_name,
+                        rel_path,
                         name,
                         description: meta.description,
                     }
@@ -701,6 +704,7 @@ pub async fn confirm_git_install(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
+    let proxy_url = store.proxy_url();
     tauri::async_runtime::spawn_blocking(move || {
         let temp_path = validate_clone_temp_path(&temp_dir)?;
 
@@ -709,7 +713,7 @@ pub async fn confirm_git_install(
                 return Ok(());
             }
 
-            let parsed = git_fetcher::parse_git_source(&repo_url);
+            let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
             let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
             let all_dirs = collect_git_skill_dirs(&skill_dir);
             let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
@@ -718,11 +722,8 @@ pub async fn confirm_git_install(
                 .map_err(AppError::db)?;
 
             for dir in &all_dirs {
-                let dir_name_entry = dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let item = match items.iter().find(|i| i.dir_name == dir_name_entry) {
+                let rel_key = skill_rel_key(&skill_dir, dir);
+                let item = match items.iter().find(|i| i.rel_path == rel_key) {
                     Some(i) => i,
                     None => continue,
                 };
@@ -1524,7 +1525,9 @@ fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppError
             let parsed = git_fetcher::parse_git_source(source_ref);
             Ok(GitSkillSource {
                 clone_url: parsed.clone_url,
-                branch: parsed.branch,
+                // Prefer the branch resolved at install time — it survives
+                // slash-branch tree URLs that the sync parse can't disambiguate.
+                branch: skill.source_branch.clone().or(parsed.branch),
                 subpath: skill.source_subpath.clone().or(parsed.subpath),
                 locator_skill_id: None,
             })
@@ -1563,23 +1566,27 @@ fn skill_ssh_id(skill: &SkillRecord) -> Option<String> {
 
 /// Return the list of individual skill directories to install from a resolved repo dir.
 /// If `skill_dir` is itself a valid skill, returns `[skill_dir]`.
-/// Otherwise enumerates immediate subdirs that are valid skills; falls back to `[skill_dir]`.
+/// Otherwise recursively walks for skill dirs (e.g. `category/<skill>` layouts).
+/// Returns an empty Vec when nothing is found — callers must handle that.
 fn collect_git_skill_dirs(skill_dir: &Path) -> Vec<PathBuf> {
     if is_valid_skill_dir(skill_dir) {
         return vec![skill_dir.to_path_buf()];
     }
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(skill_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && is_valid_skill_dir(p))
-        .collect();
+    let mut dirs = scanner::collect_skill_dirs(skill_dir);
     dirs.sort();
-    if dirs.is_empty() {
-        vec![skill_dir.to_path_buf()]
+    dirs
+}
+
+/// Stable identifier for a discovered skill within a preview/confirm cycle.
+/// Uses forward slashes regardless of platform so the frontend sees consistent keys.
+fn skill_rel_key(skill_dir: &Path, dir: &Path) -> String {
+    let rel = dir.strip_prefix(skill_dir).unwrap_or(dir);
+    if rel.as_os_str().is_empty() {
+        dir.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
     } else {
-        dirs
+        rel.to_string_lossy().replace('\\', "/")
     }
 }
 
@@ -2002,5 +2009,78 @@ mod tests {
         assert!(sync_metadata::metadata_dir()
             .join("skills/skill-2.json")
             .exists());
+    }
+
+    fn write_skill_at(root: &Path, rel: &str) -> PathBuf {
+        let dir = root.join(rel);
+        fs::create_dir_all(&dir).unwrap();
+        let basename = dir.file_name().unwrap().to_string_lossy().to_string();
+        fs::write(dir.join("SKILL.md"), format!("---\nname: {basename}\n---\n")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn collect_git_skill_dirs_finds_nested_categories() {
+        // Mirrors mattpocock/skills layout: skills/<category>/<skill>/SKILL.md.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        write_skill_at(root, "in-progress/foo");
+        write_skill_at(root, "in-progress/bar");
+        write_skill_at(root, "stable/baz");
+
+        let dirs = collect_git_skill_dirs(root);
+        let keys: Vec<String> = dirs.iter().map(|d| skill_rel_key(root, d)).collect();
+        assert_eq!(dirs.len(), 3, "should find skills two levels deep");
+        assert!(keys.contains(&"in-progress/foo".to_string()));
+        assert!(keys.contains(&"in-progress/bar".to_string()));
+        assert!(keys.contains(&"stable/baz".to_string()));
+    }
+
+    #[test]
+    fn collect_git_skill_dirs_returns_self_when_root_is_skill() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("SKILL.md"), "---\nname: x\n---").unwrap();
+        let dirs = collect_git_skill_dirs(root);
+        assert_eq!(dirs, vec![root.to_path_buf()]);
+    }
+
+    #[test]
+    fn collect_git_skill_dirs_returns_empty_when_no_skills() {
+        // Previously this case returned [skill_dir] as a bogus fallback,
+        // which then surfaced a non-skill category dir as installable.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("empty-category")).unwrap();
+        let dirs = collect_git_skill_dirs(root);
+        assert!(dirs.is_empty(), "no fallback to scan root when empty");
+    }
+
+    #[test]
+    fn skill_rel_key_uses_forward_slashes() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        let nested = root.join("a").join("b");
+        let key = skill_rel_key(&root, &nested);
+        assert_eq!(key, "a/b");
+    }
+
+    #[test]
+    fn skill_rel_key_disambiguates_same_basename_across_categories() {
+        // Two skills with the same dir basename in different categories must
+        // produce distinct rel keys — that's the point of using rel paths.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+        let a_foo = write_skill_at(root, "category-a/foo");
+        let b_foo = write_skill_at(root, "category-b/foo");
+
+        let dirs = collect_git_skill_dirs(root);
+        assert_eq!(dirs.len(), 2);
+
+        let k_a = skill_rel_key(root, &a_foo);
+        let k_b = skill_rel_key(root, &b_foo);
+        assert_ne!(k_a, k_b);
+        assert_eq!(k_a, "category-a/foo");
+        assert_eq!(k_b, "category-b/foo");
     }
 }

@@ -235,7 +235,8 @@ export const installGit = (repoUrl: string, name?: string) =>
   invoke<void>("install_git", { repoUrl, name: name || null });
 
 export interface GitSkillPreview {
-  dir_name: string;
+  /** Path relative to the resolved scan root, using `/` separators. Stable key. */
+  rel_path: string;
   name: string;
   description: string | null;
 }
@@ -246,7 +247,7 @@ export interface GitPreviewResult {
 }
 
 export interface SkillInstallItem {
-  dir_name: string;
+  rel_path: string;
   name: string;
 }
 
