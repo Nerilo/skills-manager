@@ -183,6 +183,11 @@ export function Settings() {
   const [textSize, setTextSize] = useState("default");
   const [skillsmpApiKey, setSkillsmpApiKey] = useState("");
   const [skillsmpSaving, setSkillsmpSaving] = useState(false);
+  const [wslRuntimes, setWslRuntimes] = useState<api.WslRuntimeEnvironment[]>([]);
+  const [wslDistroName, setWslDistroName] = useState("");
+  const [wslLibraryReplicaPath, setWslLibraryReplicaPath] = useState("");
+  const [savingWslRuntime, setSavingWslRuntime] = useState(false);
+  const [removingWslRuntime, setRemovingWslRuntime] = useState<string | null>(null);
   // Agent path editing
   const [editingPathKey, setEditingPathKey] = useState<string | null>(null);
   const [editingPathValue, setEditingPathValue] = useState("");
@@ -198,6 +203,12 @@ export function Settings() {
   const [showMoreAgents, setShowMoreAgents] = useState(false);
 
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
+
+  const refreshWslRuntimes = useCallback(async () => {
+    if (!IS_WINDOWS) return;
+    const runtimes = await api.listWslRuntimeEnvironments();
+    setWslRuntimes(runtimes);
+  }, []);
 
   const startEditPath = useCallback((key: string, currentPath: string) => {
     setEditingPathKey(key);
@@ -319,6 +330,7 @@ export function Settings() {
       setCentralRepoPathInput(path);
     }).catch(() => {});
     api.getCentralRepoPathOverride().then(setCentralRepoPathOverride).catch(() => {});
+    refreshWslRuntimes().catch(() => {});
 
     (async () => {
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
@@ -335,7 +347,7 @@ export function Settings() {
         api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
       }
     })();
-  }, []);
+  }, [refreshWslRuntimes]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -459,6 +471,39 @@ export function Settings() {
       toast.error(String(error));
     } finally {
       setSavingCentralRepoPath(false);
+    }
+  };
+
+  const handleAddWslRuntime = async () => {
+    setSavingWslRuntime(true);
+    try {
+      const saved = await api.addWslRuntimeEnvironment(wslDistroName, wslLibraryReplicaPath);
+      setWslRuntimes((current) => {
+        const next = current.filter(
+          (runtime) => runtime.distro_name.toLowerCase() !== saved.distro_name.toLowerCase(),
+        );
+        return [...next, saved];
+      });
+      setWslDistroName("");
+      setWslLibraryReplicaPath("");
+      toast.success(t("settings.wslRuntimeSaved"));
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setSavingWslRuntime(false);
+    }
+  };
+
+  const handleRemoveWslRuntime = async (distroName: string) => {
+    setRemovingWslRuntime(distroName);
+    try {
+      await api.removeWslRuntimeEnvironment(distroName);
+      setWslRuntimes((current) => current.filter((runtime) => runtime.distro_name !== distroName));
+      toast.success(t("settings.wslRuntimeRemoved"));
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setRemovingWslRuntime(null);
     }
   };
 
@@ -1117,6 +1162,102 @@ export function Settings() {
                   : t("settings.repoPathDefaultHint")}
               </div>
             </div>
+
+            {IS_WINDOWS && (
+              <div className="px-4 py-3">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.wslRuntime")}</h3>
+                    <p className="text-[13px] text-muted">{t("settings.wslRuntimeDesc")}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void refreshWslRuntimes()}
+                    className="inline-flex h-8 items-center gap-1 rounded-[4px] border border-border-subtle px-2.5 text-[13px] font-medium text-muted transition-colors outline-none hover:text-secondary"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    {t("settings.refresh")}
+                  </button>
+                </div>
+                <div className="mb-3 grid gap-2 md:grid-cols-[minmax(140px,0.35fr)_minmax(240px,1fr)_auto]">
+                  <input
+                    type="text"
+                    value={wslDistroName}
+                    onChange={(e) => setWslDistroName(e.target.value)}
+                    placeholder={t("settings.wslDistroPlaceholder")}
+                    className="h-8 min-w-0 rounded-[4px] border border-border-subtle bg-background px-2.5 text-[13px] text-secondary outline-none transition-colors focus:border-border"
+                  />
+                  <input
+                    type="text"
+                    value={wslLibraryReplicaPath}
+                    onChange={(e) => setWslLibraryReplicaPath(e.target.value)}
+                    placeholder={t("settings.wslReplicaPathPlaceholder")}
+                    className="h-8 min-w-0 rounded-[4px] border border-border-subtle bg-background px-2.5 text-[13px] font-mono text-secondary outline-none transition-colors focus:border-border"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleAddWslRuntime();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleAddWslRuntime()}
+                    disabled={savingWslRuntime}
+                    className="inline-flex h-8 items-center justify-center gap-1 rounded-[4px] border border-accent-border bg-accent-bg px-2.5 text-[13px] font-medium text-accent transition-colors outline-none hover:border-accent disabled:opacity-60"
+                  >
+                    {savingWslRuntime ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Plus className="w-3 h-3" />
+                    )}
+                    {t("settings.wslAddRuntime")}
+                  </button>
+                </div>
+                {wslRuntimes.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {wslRuntimes.map((runtime) => (
+                      <div
+                        key={runtime.distro_name}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-[4px] border border-border-subtle bg-background px-2.5 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            {runtime.reachable ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                            ) : (
+                              <Circle className="h-3.5 w-3.5 text-muted" />
+                            )}
+                            <span className="text-[13px] font-medium text-secondary">{runtime.distro_name}</span>
+                            <span className={cn(
+                              "text-[12px]",
+                              runtime.reachable ? "text-emerald-600" : "text-muted"
+                            )}>
+                              {runtime.reachable ? t("settings.wslReachable") : t("settings.wslUnreachable")}
+                            </span>
+                          </div>
+                          <p className="truncate text-[12px] font-mono text-muted" title={runtime.library_replica_path}>
+                            {runtime.library_replica_path}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleRemoveWslRuntime(runtime.distro_name)}
+                          disabled={removingWslRuntime === runtime.distro_name}
+                          className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-border-subtle px-2 text-[12px] font-medium text-muted transition-colors outline-none hover:text-red-600 disabled:opacity-60"
+                          title={t("settings.wslRemoveRuntime")}
+                        >
+                          {removingWslRuntime === runtime.distro_name ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3 h-3" />
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[12px] text-muted">{t("settings.wslRuntimeEmpty")}</p>
+                )}
+              </div>
+            )}
 
             {/* Sync mode */}
             <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">

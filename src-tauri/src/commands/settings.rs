@@ -3,7 +3,9 @@ use std::process::Command;
 use std::sync::Arc;
 use tauri::State;
 
-use crate::core::{central_repo, error::AppError, skill_store::SkillStore, skillssh_api};
+use crate::core::{
+    central_repo, error::AppError, skill_store::SkillStore, skillssh_api, wsl_runtime,
+};
 
 #[derive(serde::Serialize)]
 pub struct AppUpdateInfo {
@@ -11,6 +13,13 @@ pub struct AppUpdateInfo {
     pub current_version: String,
     pub latest_version: String,
     pub release_url: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct WslRuntimeEnvironmentDto {
+    pub distro_name: String,
+    pub library_replica_path: String,
+    pub reachable: bool,
 }
 
 #[tauri::command]
@@ -78,6 +87,60 @@ pub async fn set_central_repo_path(path: Option<String>) -> Result<String, AppEr
         central_repo::set_base_dir_override(path)
             .map(|resolved| resolved.to_string_lossy().to_string())
             .map_err(AppError::io)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn list_wsl_runtime_environments(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<WslRuntimeEnvironmentDto>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        wsl_runtime::list_runtime_environments(&store)
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(|item| WslRuntimeEnvironmentDto {
+                        distro_name: item.distro_name,
+                        library_replica_path: item.library_replica_path,
+                        reachable: item.reachable,
+                    })
+                    .collect()
+            })
+            .map_err(AppError::internal)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn add_wsl_runtime_environment(
+    distro_name: String,
+    library_replica_path: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<WslRuntimeEnvironmentDto, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        wsl_runtime::add_runtime_environment(&store, &distro_name, &library_replica_path)
+            .map(|item| WslRuntimeEnvironmentDto {
+                distro_name: item.distro_name,
+                library_replica_path: item.library_replica_path,
+                reachable: item.reachable,
+            })
+            .map_err(AppError::invalid_input)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn remove_wsl_runtime_environment(
+    distro_name: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        wsl_runtime::remove_runtime_environment(&store, &distro_name)
+            .map_err(AppError::invalid_input)
     })
     .await?
 }

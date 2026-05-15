@@ -405,6 +405,27 @@ export interface AppUpdateInfo {
 export const checkAppUpdate = () =>
   invoke<AppUpdateInfo>("check_app_update");
 
+export interface WslRuntimeEnvironment {
+  distro_name: string;
+  library_replica_path: string;
+  reachable: boolean;
+}
+
+export const listWslRuntimeEnvironments = () =>
+  invoke<WslRuntimeEnvironment[]>("list_wsl_runtime_environments");
+
+export const addWslRuntimeEnvironment = (
+  distroName: string,
+  libraryReplicaPath: string,
+) =>
+  invoke<WslRuntimeEnvironment>("add_wsl_runtime_environment", {
+    distroName,
+    libraryReplicaPath,
+  });
+
+export const removeWslRuntimeEnvironment = (distroName: string) =>
+  invoke<void>("remove_wsl_runtime_environment", { distroName });
+
 // ── Git Backup ──
 
 export type GitUpstreamHealth =

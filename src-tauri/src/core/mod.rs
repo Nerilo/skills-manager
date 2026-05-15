@@ -21,3 +21,4 @@ pub mod sync_engine;
 pub mod sync_metadata;
 pub mod tool_adapters;
 pub mod tool_service;
+pub mod wsl_runtime;
