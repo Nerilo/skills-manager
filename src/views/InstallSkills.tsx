@@ -296,7 +296,7 @@ export function InstallSkills() {
         },
       });
     } catch (e) {
-      const message = (e as Error)?.toString?.() || t("common.error");
+      const message = getErrorMessage(e, t("common.error"));
       setLocalError(message);
       toast.error(message, { id: toastId });
     }
