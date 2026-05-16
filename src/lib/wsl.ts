@@ -28,6 +28,13 @@ export interface WslRuntimeEnvironment {
   distro_name: string;
   library_replica_path: string;
   reachable: boolean;
+  agent_targets: WslAgentTargetConfig[];
+}
+
+export interface WslAgentTargetConfig {
+  key: string;
+  enabled: boolean;
+  skills_dir: string | null;
 }
 
 export interface WslAgentTarget {

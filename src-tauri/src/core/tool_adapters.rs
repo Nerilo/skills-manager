@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::wsl_runtime;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolAdapter {
     pub key: String,
@@ -689,6 +691,75 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
         });
     }
 
+    adapters.extend(wsl_tool_adapters(store));
+    adapters
+}
+
+fn wsl_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAdapter> {
+    let runtimes = wsl_runtime::list_runtime_environments(store).unwrap_or_default();
+    let base_adapters = all_windows_tool_adapters(store);
+    let mut adapters = Vec::new();
+
+    for runtime_status in runtimes {
+        let runtime = wsl_runtime::WslRuntimeEnvironment {
+            distro_name: runtime_status.distro_name.clone(),
+            library_replica_path: runtime_status.library_replica_path,
+            agent_targets: runtime_status.agent_targets,
+        };
+        for base in &base_adapters {
+            let configured = wsl_runtime::configured_agent_target(&runtime, &base.key);
+            let skills_dir = configured.and_then(|target| target.skills_dir).or_else(|| {
+                wsl_runtime::resolve_agent_target_path(&runtime, &base.relative_skills_dir).ok()
+            });
+            let Some(skills_dir) = skills_dir else {
+                continue;
+            };
+
+            adapters.push(ToolAdapter {
+                key: wsl_runtime::wsl_tool_key(&runtime.distro_name, &base.key),
+                display_name: format!("{} ({})", base.display_name, runtime.distro_name),
+                relative_skills_dir: base.relative_skills_dir.clone(),
+                relative_detect_dir: String::new(),
+                additional_scan_dirs: vec![],
+                override_skills_dir: Some(skills_dir),
+                is_custom: base.is_custom,
+                recursive_scan: base.recursive_scan,
+                project_relative_skills_dir: base.project_relative_skills_dir.clone(),
+            });
+        }
+    }
+
+    adapters
+}
+
+fn all_windows_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAdapter> {
+    let overrides = custom_tool_paths(store);
+    let customs = custom_tools(store);
+
+    let mut adapters: Vec<ToolAdapter> = default_tool_adapters()
+        .into_iter()
+        .map(|mut a| {
+            if let Some(path) = overrides.get(&a.key) {
+                a.override_skills_dir = Some(path.clone());
+            }
+            a
+        })
+        .collect();
+
+    for ct in customs {
+        adapters.push(ToolAdapter {
+            key: ct.key,
+            display_name: ct.display_name,
+            relative_skills_dir: ct.project_relative_skills_dir.unwrap_or_default(),
+            relative_detect_dir: String::new(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: Some(ct.skills_dir),
+            is_custom: true,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        });
+    }
+
     adapters
 }
 
@@ -702,6 +773,10 @@ pub fn find_adapter_with_store(
     store: &crate::core::skill_store::SkillStore,
     key: &str,
 ) -> Option<ToolAdapter> {
+    if wsl_runtime::parse_wsl_tool_key(key).is_some() {
+        return all_tool_adapters(store).into_iter().find(|a| a.key == key);
+    }
+
     if let Some(mut adapter) = default_tool_adapters().into_iter().find(|a| a.key == key) {
         if let Some(path) = custom_tool_paths(store).get(key) {
             adapter.override_skills_dir = Some(path.clone());
@@ -737,13 +812,21 @@ pub fn enabled_installed_adapters(
         .unwrap_or_default();
     all_tool_adapters(store)
         .into_iter()
-        .filter(|a| a.is_installed() && !disabled.contains(&a.key))
+        .filter(|a| {
+            if let Some((distro_name, agent_key)) = wsl_runtime::parse_wsl_tool_key(&a.key) {
+                return a.is_installed()
+                    && wsl_runtime::agent_target_enabled(store, distro_name, agent_key);
+            }
+            a.is_installed() && !disabled.contains(&a.key)
+        })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::default_tool_adapters;
+    use super::{all_tool_adapters, default_tool_adapters};
+    use crate::core::skill_store::SkillStore;
+    use tempfile::tempdir;
 
     #[test]
     fn antigravity_uses_current_default_skills_path() {
@@ -776,5 +859,62 @@ mod tests {
         assert_eq!(adapter.relative_skills_dir, ".config/opencode/skills");
         // Project path under workspace: .opencode/skills
         assert_eq!(adapter.project_relative_skills_dir(), ".opencode/skills");
+    }
+
+    #[test]
+    fn wsl_runtime_agent_targets_resolve_independently_from_windows_overrides() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("tools.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                r#"{"codex":"C:\\Users\\me\\custom-codex-skills"}"#,
+            )
+            .unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\skills"}]"#,
+            )
+            .unwrap();
+
+        let adapters = all_tool_adapters(&store);
+        let windows_codex = adapters
+            .iter()
+            .find(|adapter| adapter.key == "codex")
+            .expect("Windows Codex adapter should exist");
+        let wsl_codex = adapters
+            .iter()
+            .find(|adapter| adapter.key == "wsl:Ubuntu:codex")
+            .expect("WSL Codex adapter should exist");
+
+        assert_eq!(
+            windows_codex.skills_dir().to_string_lossy(),
+            r"C:\Users\me\custom-codex-skills"
+        );
+        assert_eq!(
+            wsl_codex.skills_dir().to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu\home\me\.agents\skills"
+        );
+    }
+
+    #[test]
+    fn disabled_wsl_runtime_agent_targets_remain_listable_but_not_enabled() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("disabled-wsl-tools.db")).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\skills","agent_targets":[{"key":"codex","enabled":false}]}]"#,
+            )
+            .unwrap();
+
+        let adapters = all_tool_adapters(&store);
+        assert!(adapters
+            .iter()
+            .any(|adapter| adapter.key == "wsl:Ubuntu:codex"));
+        assert!(!super::enabled_installed_adapters(&store)
+            .iter()
+            .any(|adapter| adapter.key == "wsl:Ubuntu:codex"));
     }
 }

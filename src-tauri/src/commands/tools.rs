@@ -10,10 +10,11 @@ use crate::core::skill_store::SkillStore;
 use crate::core::sync_engine;
 use crate::core::tool_adapters::{self, CustomToolDef};
 use crate::core::tool_service::{
-    self, ToolInfo, get_custom_tool_paths, get_custom_tools, get_disabled_tools, get_tool_order,
+    self, get_custom_tool_paths, get_custom_tools, get_disabled_tools, get_tool_order,
     normalize_project_relative_skills_dir_input, normalize_skills_dir_input, set_custom_tool_paths,
-    set_custom_tools, set_disabled_tools, set_tool_order,
+    set_custom_tools, set_disabled_tools, set_tool_order, ToolInfo,
 };
+use crate::core::wsl_runtime;
 
 #[derive(Debug, Serialize)]
 pub struct ToolInfoDto {
@@ -25,6 +26,8 @@ pub struct ToolInfoDto {
     pub is_custom: bool,
     pub has_path_override: bool,
     pub project_relative_skills_dir: Option<String>,
+    pub runtime_environment: String,
+    pub wsl_distro_name: Option<String>,
 }
 
 /// Sync active scenario skills to a single tool.
@@ -59,6 +62,8 @@ pub async fn get_tool_status(
         let result: Vec<ToolInfoDto> = tool_service::list_tool_info(&store)
             .into_iter()
             .map(|info: ToolInfo| ToolInfoDto {
+                runtime_environment: info.runtime_environment,
+                wsl_distro_name: info.wsl_distro_name,
                 key: info.key,
                 display_name: info.display_name,
                 installed: info.installed,
@@ -82,6 +87,29 @@ pub async fn set_tool_enabled(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        if let Some((distro_name, agent_key)) = wsl_runtime::parse_wsl_tool_key(&key) {
+            let current_adapter = tool_adapters::find_adapter_with_store(&store, &key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
+            let old_skills_dir = current_adapter.skills_dir();
+            if enabled {
+                wsl_runtime::set_agent_target_enabled(&store, distro_name, agent_key, true)
+                    .map_err(AppError::internal)?;
+                sync_active_scenario_to_tool(&store, &key);
+            } else {
+                unsync_all_for_tool(&store, &key);
+                wsl_runtime::set_agent_target_enabled(&store, distro_name, agent_key, false)
+                    .map_err(AppError::internal)?;
+            }
+            if enabled {
+                if let Some(new_adapter) = tool_adapters::find_adapter_with_store(&store, &key) {
+                    if old_skills_dir != new_adapter.skills_dir() {
+                        reconcile_tool_sync_after_path_change(&store, &key);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         let mut disabled = get_disabled_tools(&store);
         if enabled {
             disabled.retain(|k| k != &key);
@@ -106,18 +134,36 @@ pub async fn set_all_tools_enabled(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let adapters = tool_adapters::all_tool_adapters(&store);
         if enabled {
             set_disabled_tools(&store, &[])?;
+            for adapter in &adapters {
+                if let Some((distro_name, agent_key)) =
+                    wsl_runtime::parse_wsl_tool_key(&adapter.key)
+                {
+                    wsl_runtime::set_agent_target_enabled(&store, distro_name, agent_key, true)
+                        .map_err(AppError::internal)?;
+                }
+            }
             // Re-sync active scenario skills to all (now-enabled) installed tools
             if let Ok(Some(active_id)) = store.get_active_scenario_id() {
                 sync_scenario_skills(&store, &active_id).ok();
             }
             Ok(())
         } else {
-            let adapters = tool_adapters::all_tool_adapters(&store);
-            let all_keys: Vec<String> = adapters.iter().map(|a| a.key.clone()).collect();
+            let all_keys: Vec<String> = adapters
+                .iter()
+                .filter(|a| wsl_runtime::parse_wsl_tool_key(&a.key).is_none())
+                .map(|a| a.key.clone())
+                .collect();
             for adapter in &adapters {
                 unsync_all_for_tool(&store, &adapter.key);
+                if let Some((distro_name, agent_key)) =
+                    wsl_runtime::parse_wsl_tool_key(&adapter.key)
+                {
+                    wsl_runtime::set_agent_target_enabled(&store, distro_name, agent_key, false)
+                        .map_err(AppError::internal)?;
+                }
             }
             set_disabled_tools(&store, &all_keys)
         }
@@ -151,6 +197,20 @@ pub async fn set_custom_tool_path(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let key = key.trim().to_string();
+        if let Some((distro_name, agent_key)) = wsl_runtime::parse_wsl_tool_key(&key) {
+            let old_adapter = tool_adapters::find_adapter_with_store(&store, &key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
+            let old_skills_dir = old_adapter.skills_dir();
+            wsl_runtime::set_agent_target_path(&store, distro_name, agent_key, &path)
+                .map_err(AppError::internal)?;
+            let new_adapter = tool_adapters::find_adapter_with_store(&store, &key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
+            if old_skills_dir != new_adapter.skills_dir() {
+                reconcile_tool_sync_after_path_change(&store, &key);
+            }
+            return Ok(());
+        }
+
         let path = normalize_skills_dir_input(&path)?;
         if key.is_empty() || path.is_empty() {
             return Err(AppError::invalid_input("Key and path are required"));
@@ -187,6 +247,20 @@ pub async fn reset_custom_tool_path(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        if let Some((distro_name, agent_key)) = wsl_runtime::parse_wsl_tool_key(&key) {
+            let old_adapter = tool_adapters::find_adapter_with_store(&store, &key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
+            let old_skills_dir = old_adapter.skills_dir();
+            wsl_runtime::reset_agent_target_path(&store, distro_name, agent_key)
+                .map_err(AppError::internal)?;
+            let new_adapter = tool_adapters::find_adapter_with_store(&store, &key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
+            if old_skills_dir != new_adapter.skills_dir() {
+                reconcile_tool_sync_after_path_change(&store, &key);
+            }
+            return Ok(());
+        }
+
         let old_adapter = tool_adapters::find_adapter_with_store(&store, &key)
             .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
         let old_skills_dir = old_adapter.skills_dir();

@@ -21,6 +21,8 @@ export interface ToolInfo {
   is_custom: boolean;
   has_path_override: boolean;
   project_relative_skills_dir: string | null;
+  runtime_environment: "windows" | "wsl";
+  wsl_distro_name: string | null;
 }
 
 export interface ManagedSkill {

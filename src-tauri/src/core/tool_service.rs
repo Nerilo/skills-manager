@@ -5,6 +5,7 @@ use super::{
     error::AppError,
     skill_store::SkillStore,
     tool_adapters::{self, CustomToolDef},
+    wsl_runtime,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -17,6 +18,8 @@ pub struct ToolInfo {
     pub is_custom: bool,
     pub has_path_override: bool,
     pub project_relative_skills_dir: Option<String>,
+    pub runtime_environment: String,
+    pub wsl_distro_name: Option<String>,
 }
 
 pub fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
@@ -116,7 +119,10 @@ pub fn get_custom_tools(store: &SkillStore) -> Vec<CustomToolDef> {
     tool_adapters::custom_tools(store)
 }
 
-pub fn set_custom_tools(store: &SkillStore, custom_tools: &[CustomToolDef]) -> Result<(), AppError> {
+pub fn set_custom_tools(
+    store: &SkillStore,
+    custom_tools: &[CustomToolDef],
+) -> Result<(), AppError> {
     let json = serde_json::to_string(custom_tools)
         .map_err(|e| AppError::internal(format!("Failed to serialize: {e}")))?;
     store
@@ -178,22 +184,37 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
     let disabled = disabled_tools_set(store);
     let infos: Vec<ToolInfo> = tool_adapters::all_tool_adapters(store)
         .into_iter()
-        .map(|adapter| ToolInfo {
-            key: adapter.key.clone(),
-            display_name: adapter.display_name.clone(),
-            installed: adapter.is_installed(),
-            skills_dir: adapter.skills_dir().to_string_lossy().to_string(),
-            enabled: !disabled.contains(&adapter.key),
-            is_custom: adapter.is_custom,
-            has_path_override: adapter.has_path_override(),
-            project_relative_skills_dir: {
-                let project_dir = adapter.project_relative_skills_dir();
-                if project_dir.is_empty() {
-                    None
-                } else {
-                    Some(project_dir.to_string())
-                }
-            },
+        .map(|adapter| {
+            let wsl_key = wsl_runtime::parse_wsl_tool_key(&adapter.key);
+            ToolInfo {
+                runtime_environment: wsl_key
+                    .map(|_| "wsl".to_string())
+                    .unwrap_or_else(|| "windows".to_string()),
+                wsl_distro_name: wsl_key.map(|(distro_name, _)| distro_name.to_string()),
+                key: adapter.key.clone(),
+                display_name: adapter.display_name.clone(),
+                installed: adapter.is_installed(),
+                skills_dir: adapter.skills_dir().to_string_lossy().to_string(),
+                enabled: wsl_key
+                    .map(|(distro_name, agent_key)| {
+                        wsl_runtime::agent_target_enabled(store, distro_name, agent_key)
+                    })
+                    .unwrap_or_else(|| !disabled.contains(&adapter.key)),
+                is_custom: adapter.is_custom,
+                has_path_override: wsl_key
+                    .map(|(distro_name, agent_key)| {
+                        wsl_runtime::agent_target_has_path_override(store, distro_name, agent_key)
+                    })
+                    .unwrap_or_else(|| adapter.has_path_override()),
+                project_relative_skills_dir: {
+                    let project_dir = adapter.project_relative_skills_dir();
+                    if project_dir.is_empty() {
+                        None
+                    } else {
+                        Some(project_dir.to_string())
+                    }
+                },
+            }
         })
         .collect();
 
@@ -201,7 +222,8 @@ pub fn list_tool_info(store: &SkillStore) -> Vec<ToolInfo> {
     let all_keys: Vec<String> = infos.iter().map(|i| i.key.clone()).collect();
     let ordered_keys = merge_order(&saved, &all_keys);
 
-    let mut by_key: HashMap<String, ToolInfo> = infos.into_iter().map(|i| (i.key.clone(), i)).collect();
+    let mut by_key: HashMap<String, ToolInfo> =
+        infos.into_iter().map(|i| (i.key.clone(), i)).collect();
     ordered_keys
         .into_iter()
         .filter_map(|k| by_key.remove(&k))
@@ -285,7 +307,11 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
         set_custom_tools(store, &normalized_customs)?;
     }
 
-    if changed || store.has_tool_key_references(OLD_KEY).map_err(AppError::db)? {
+    if changed
+        || store
+            .has_tool_key_references(OLD_KEY)
+            .map_err(AppError::db)?
+    {
         store
             .remap_tool_key_references(OLD_KEY, NEW_KEY)
             .map_err(AppError::db)?;

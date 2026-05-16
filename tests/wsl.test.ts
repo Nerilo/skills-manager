@@ -15,6 +15,7 @@ describe("WSL location display model", () => {
       distro_name: "Ubuntu-24.04",
       library_replica_path: "/home/me/.codex/skills",
       reachable: true,
+      agent_targets: [],
     });
 
     assert.equal(formatLocationLabel(windowsLocation), "Windows · C:\\Users\\me\\.codex\\skills");
@@ -33,6 +34,7 @@ describe("WSL location display model", () => {
       distro_name: "Ubuntu-24.04",
       library_replica_path: "/home/me/.codex/skills",
       reachable: false,
+      agent_targets: [],
     };
 
     assert.deepEqual(wslAgentTargetFromRuntime("codex", "Codex", runtime), {

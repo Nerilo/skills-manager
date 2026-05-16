@@ -84,6 +84,11 @@ function compactHomePath(path: string) {
     .replace(/^[A-Za-z]:\\Users\\[^\\]+/, "~");
 }
 
+function baseAgentKey(key: string) {
+  if (!key.startsWith("wsl:")) return key;
+  return key.split(":").slice(2).join(":") || key;
+}
+
 interface SortableAgentCardProps {
   agentKey: string;
   dragLabel: string;
@@ -624,8 +629,16 @@ export function Settings() {
     () => installedTools.filter((tool) => tool.enabled),
     [installedTools]
   );
-  const customTools = useMemo(() => tools.filter((tool) => tool.is_custom), [tools]);
-  const builtInTools = useMemo(() => tools.filter((tool) => !tool.is_custom), [tools]);
+  const windowsTools = useMemo(
+    () => tools.filter((tool) => tool.runtime_environment !== "wsl"),
+    [tools]
+  );
+  const wslTools = useMemo(
+    () => tools.filter((tool) => tool.runtime_environment === "wsl"),
+    [tools]
+  );
+  const customTools = useMemo(() => windowsTools.filter((tool) => tool.is_custom), [windowsTools]);
+  const builtInTools = useMemo(() => windowsTools.filter((tool) => !tool.is_custom), [windowsTools]);
   const mainstreamTools = useMemo(
     () => builtInTools.filter((tool) => MAINSTREAM_AGENT_KEYS.has(tool.key)),
     [builtInTools]
@@ -705,7 +718,7 @@ export function Settings() {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <AgentIcon
-                  agentKey={agent.key}
+                  agentKey={baseAgentKey(agent.key)}
                   displayName={agent.display_name}
                   className="h-5 w-5 rounded-[5px]"
                 />
@@ -760,6 +773,11 @@ export function Settings() {
           </div>
 
           <div className="mt-0.5 flex flex-wrap items-center gap-1">
+            {agent.runtime_environment === "wsl" && (
+              <span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">
+                {t("settings.wslBackedTarget")}
+              </span>
+            )}
             {agent.is_custom && (
               <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300">
                 {t("settings.customAgent")}
@@ -1029,6 +1047,20 @@ export function Settings() {
                     renderAgentCard={renderAgentCard}
                   />
                 )}
+              </div>
+            )}
+
+            {wslTools.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="text-[13px] font-medium text-secondary">{t("settings.wslAgentTargetsSection")}</h3>
+                  <span className="text-[12px] text-muted">{wslTools.length}</span>
+                </div>
+                <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2 xl:grid-cols-3">
+                  {wslTools.map((agent) => (
+                    <div key={agent.key}>{renderAgentCard(agent)}</div>
+                  ))}
+                </div>
               </div>
             )}
 
