@@ -488,7 +488,7 @@ export function Settings() {
       setWslLibraryReplicaPath("");
       toast.success(t("settings.wslRuntimeSaved"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getErrorMessage(error, t("common.error")));
     } finally {
       setSavingWslRuntime(false);
     }
@@ -501,7 +501,7 @@ export function Settings() {
       setWslRuntimes((current) => current.filter((runtime) => runtime.distro_name !== distroName));
       toast.success(t("settings.wslRuntimeRemoved"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getErrorMessage(error, t("common.error")));
     } finally {
       setRemovingWslRuntime(null);
     }

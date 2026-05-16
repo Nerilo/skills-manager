@@ -127,7 +127,7 @@ pub async fn add_wsl_runtime_environment(
                 library_replica_path: item.library_replica_path,
                 reachable: item.reachable,
             })
-            .map_err(AppError::invalid_input)
+            .map_err(|err| AppError::invalid_input(err.to_string()))
     })
     .await?
 }
@@ -140,7 +140,7 @@ pub async fn remove_wsl_runtime_environment(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         wsl_runtime::remove_runtime_environment(&store, &distro_name)
-            .map_err(AppError::invalid_input)
+            .map_err(|err| AppError::invalid_input(err.to_string()))
     })
     .await?
 }
