@@ -112,6 +112,8 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
 }
 
 pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> Result<()> {
+    ensure_library_replica_target(library_replica)?;
+
     if let Some(parent) = library_replica.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create parent dir {:?}", parent))?;
@@ -121,6 +123,17 @@ pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> R
     remove_target(library_replica)
         .with_context(|| format!("Failed to remove existing target {:?}", library_replica))?;
     copy_dir_recursive(primary_library, library_replica)
+}
+
+fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
+    let name = library_replica
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if name != ".skills-manager" {
+        anyhow::bail!("Library Replica target must be named .skills-manager");
+    }
+    Ok(())
 }
 
 pub fn is_target_current(source: &Path, target: &Path, mode: SyncMode) -> bool {
@@ -450,7 +463,11 @@ mod tests {
     fn sync_library_replica_rebuilds_copy_without_importing_replica_drift() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
-        let replica = tmp.path().join("runtime").join("replica").join("skills");
+        let replica = tmp
+            .path()
+            .join("runtime")
+            .join("replica")
+            .join(".skills-manager");
         fs::create_dir_all(primary.join("hello")).unwrap();
         fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
 
@@ -480,13 +497,32 @@ mod tests {
         fs::write(primary.join("SKILL.md"), "# primary").unwrap();
         let blocked_parent = tmp.path().join("blocked");
         fs::write(&blocked_parent, "not a directory").unwrap();
-        let replica = blocked_parent.join("skills");
+        let replica = blocked_parent.join(".skills-manager");
 
         let err = sync_library_replica(&primary, &replica).unwrap_err();
 
         assert!(
             err.to_string().contains("Failed to create parent dir"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn sync_library_replica_rejects_non_skills_manager_target() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = tmp.path().join("home").join("me").join("Documents");
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(primary.join("SKILL.md"), "# primary").unwrap();
+        fs::create_dir_all(&replica).unwrap();
+        fs::write(replica.join("personal.txt"), "keep me").unwrap();
+
+        let err = sync_library_replica(&primary, &replica).unwrap_err();
+
+        assert!(err.to_string().contains(".skills-manager"), "{err}");
+        assert_eq!(
+            fs::read_to_string(replica.join("personal.txt")).unwrap(),
+            "keep me"
         );
     }
 
