@@ -133,14 +133,14 @@ pub fn resolve_agent_target_path(
     runtime: &WslRuntimeEnvironment,
     relative_skills_dir: &str,
 ) -> Result<String> {
-    let base = runtime_home_from_library_replica(runtime)?;
     let relative = relative_skills_dir
         .trim()
         .trim_start_matches(['/', '\\'])
         .replace('/', r"\");
     if relative.is_empty() {
-        return Ok(base);
+        bail!("Agent Target default path requires a relative skills directory");
     }
+    let base = default_agent_target_base_from_library_replica(runtime)?;
     Ok(format!(r"{base}\{relative}"))
 }
 
@@ -172,7 +172,7 @@ pub fn agent_target_enabled(store: &SkillStore, distro_name: &str, agent_key: &s
         .ok()
         .and_then(|runtime| configured_agent_target(&runtime, agent_key))
         .map(|target| target.enabled)
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 pub fn set_agent_target_enabled(
@@ -305,7 +305,9 @@ fn normalize_agent_target_path(distro_name: &str, raw: &str) -> Result<String> {
     bail!("Agent Target path must use /home/user/..., Distro:/home/user/..., or \\\\wsl.localhost\\Distro\\...")
 }
 
-fn runtime_home_from_library_replica(runtime: &WslRuntimeEnvironment) -> Result<String> {
+fn default_agent_target_base_from_library_replica(
+    runtime: &WslRuntimeEnvironment,
+) -> Result<String> {
     let normalized =
         normalize_library_replica_path(&runtime.distro_name, &runtime.library_replica_path)?;
     let prefix = format!(r"\\wsl.localhost\{}\", runtime.distro_name);
@@ -315,10 +317,15 @@ fn runtime_home_from_library_replica(runtime: &WslRuntimeEnvironment) -> Result<
     let mut parts = rest.split('\\');
     let first = parts.next().unwrap_or_default();
     let second = parts.next().unwrap_or_default();
-    if first != "home" || second.is_empty() {
-        bail!("Library Replica path must be under /home/<user> to resolve default Agent Targets");
+    if first == "home" && !second.is_empty() {
+        return Ok(format!(r"{prefix}home\{second}"));
     }
-    Ok(format!(r"{prefix}home\{second}"))
+    let Some((parent, _replica_name)) = normalized.rsplit_once('\\') else {
+        bail!(
+            "Library Replica path must include a parent directory to resolve default Agent Targets"
+        );
+    };
+    Ok(parent.to_string())
 }
 
 fn ensure_same_distro(expected: &str, actual: &str) -> Result<()> {
@@ -436,5 +443,53 @@ mod tests {
             r#"["codex"]"#
         );
         assert!(store.get_setting("custom_tool_paths").unwrap().is_none());
+    }
+
+    #[test]
+    fn resolves_default_agent_target_under_home_when_replica_is_under_home() {
+        let runtime = WslRuntimeEnvironment {
+            distro_name: "Ubuntu".to_string(),
+            library_replica_path: r"\\wsl.localhost\Ubuntu\home\me\.skills-manager".to_string(),
+            agent_targets: vec![],
+        };
+
+        let resolved = resolve_agent_target_path(&runtime, ".agents/skills").unwrap();
+
+        assert_eq!(resolved, r"\\wsl.localhost\Ubuntu\home\me\.agents\skills");
+    }
+
+    #[test]
+    fn resolves_default_agent_target_next_to_replica_when_replica_is_outside_home() {
+        let runtime = WslRuntimeEnvironment {
+            distro_name: "Ubuntu".to_string(),
+            library_replica_path: r"\\wsl.localhost\Ubuntu\mnt\d\skills".to_string(),
+            agent_targets: vec![],
+        };
+
+        let resolved = resolve_agent_target_path(&runtime, ".agents/skills").unwrap();
+
+        assert_eq!(resolved, r"\\wsl.localhost\Ubuntu\mnt\d\.agents\skills");
+    }
+
+    #[test]
+    fn rejects_empty_default_agent_target_relative_path() {
+        let runtime = WslRuntimeEnvironment {
+            distro_name: "Ubuntu".to_string(),
+            library_replica_path: r"\\wsl.localhost\Ubuntu\home\me\skills".to_string(),
+            agent_targets: vec![],
+        };
+
+        let err = resolve_agent_target_path(&runtime, "").unwrap_err();
+
+        assert!(err.to_string().contains("relative skills directory"));
+    }
+
+    #[test]
+    fn unconfigured_wsl_agent_targets_are_disabled_by_default() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-disabled-default.db")).unwrap();
+        add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/skills").unwrap();
+
+        assert!(!agent_target_enabled(&store, "Ubuntu", "codex"));
     }
 }
