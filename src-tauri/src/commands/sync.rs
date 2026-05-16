@@ -24,6 +24,14 @@ fn disabled_tools(store: &SkillStore) -> Vec<String> {
     tool_service::get_disabled_tools(store)
 }
 
+fn tool_globally_enabled(store: &SkillStore, tool: &str, disabled: &[String]) -> bool {
+    wsl_runtime::parse_wsl_tool_key(tool)
+        .map(|(distro_name, agent_key)| {
+            wsl_runtime::agent_target_enabled(store, distro_name, agent_key)
+        })
+        .unwrap_or_else(|| !disabled.contains(&tool.to_string()))
+}
+
 fn sync_skill_to_tool_internal(
     store: &SkillStore,
     skill_id: &str,
@@ -128,7 +136,9 @@ pub async fn get_skill_tool_toggles(
         let all_adapters = tool_adapters::all_tool_adapters(&store);
         let default_enabled_keys: Vec<String> = all_adapters
             .iter()
-            .filter(|adapter| adapter.is_installed() && !disabled.contains(&adapter.key))
+            .filter(|adapter| {
+                adapter.is_installed() && tool_globally_enabled(&store, &adapter.key, &disabled)
+            })
             .map(|adapter| adapter.key.clone())
             .collect();
         store
@@ -147,7 +157,7 @@ pub async fn get_skill_tool_toggles(
             .into_iter()
             .map(|adapter| {
                 let wsl_key = wsl_runtime::parse_wsl_tool_key(&adapter.key);
-                let globally_enabled = !disabled.contains(&adapter.key);
+                let globally_enabled = tool_globally_enabled(&store, &adapter.key, &disabled);
                 let available = adapter.is_installed() && globally_enabled;
                 SkillToolToggleDto {
                     // Unavailable tools are always presented as disabled in UI.
@@ -192,7 +202,7 @@ pub async fn set_skill_tool_toggle(
         let adapter = tool_adapters::find_adapter_with_store(&store, &tool)
             .ok_or_else(|| AppError::not_found(format!("Unknown tool: {}", tool)))?;
         let disabled = disabled_tools(&store);
-        let globally_enabled = !disabled.contains(&tool);
+        let globally_enabled = tool_globally_enabled(&store, &tool, &disabled);
 
         if enabled {
             if !adapter.is_installed() {

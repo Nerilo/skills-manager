@@ -172,8 +172,13 @@ fn project_agent_targets_for_record(
         .map(|config| {
             let adapter = tool_adapters::find_adapter_with_store(store, &config.key);
             let wsl_key = crate::core::wsl_runtime::parse_wsl_tool_key(&config.key);
+            let enabled = wsl_key
+                .map(|(distro_name, agent_key)| {
+                    crate::core::wsl_runtime::agent_target_enabled(store, distro_name, agent_key)
+                })
+                .unwrap_or_else(|| !disabled_tools.contains(&config.key));
             ProjectAgentTargetDto {
-                enabled: !disabled_tools.contains(&config.key),
+                enabled,
                 installed: adapter.as_ref().map(|a| a.is_installed()).unwrap_or(false),
                 is_custom: adapter.as_ref().map(|a| a.is_custom).unwrap_or(false),
                 skills_dir: adapter
