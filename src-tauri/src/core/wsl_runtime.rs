@@ -76,7 +76,23 @@ pub fn add_runtime_environment(
 }
 
 pub fn list_runtime_environments(store: &SkillStore) -> Result<Vec<WslRuntimeEnvironmentStatus>> {
-    Ok(load_environments(store)?.into_iter().map(to_status).collect())
+    Ok(load_environments(store)?
+        .into_iter()
+        .map(to_status)
+        .collect())
+}
+
+pub fn get_runtime_environment(
+    store: &SkillStore,
+    distro_name: &str,
+) -> Result<WslRuntimeEnvironment> {
+    let distro_name = normalize_distro_name(distro_name)?;
+    load_environments(store)?
+        .into_iter()
+        .find(|env| env.distro_name.eq_ignore_ascii_case(&distro_name))
+        .ok_or_else(|| {
+            anyhow::anyhow!("WSL runtime environment \"{distro_name}\" is not configured")
+        })
 }
 
 pub fn remove_runtime_environment(store: &SkillStore, distro_name: &str) -> Result<()> {

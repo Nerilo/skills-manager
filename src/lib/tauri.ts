@@ -347,6 +347,9 @@ export const setSkillToolToggle = (
 ) =>
   invoke<void>("set_skill_tool_toggle", { skillId, scenarioId, tool, enabled });
 
+export const syncWslLibraryReplica = (distroName: string) =>
+  invoke<void>("sync_wsl_library_replica", { distroName });
+
 // ── Scan ──
 
 export const scanLocalSkills = () => invoke<ScanResult>("scan_local_skills");

@@ -111,6 +111,10 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
     }
 }
 
+pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> Result<()> {
+    sync_skill(primary_library, library_replica, SyncMode::Copy).map(|_| ())
+}
+
 pub fn is_target_current(source: &Path, target: &Path, mode: SyncMode) -> bool {
     match mode {
         SyncMode::Symlink => symlink_points_to(target, source),
@@ -425,6 +429,52 @@ mod tests {
         assert!(err.to_string().contains("infinite recursion"), "{err}");
         // Source must be untouched after the rejection.
         assert!(src.join("SKILL.md").exists());
+    }
+
+    // ── sync_library_replica ──
+
+    #[test]
+    fn sync_library_replica_rebuilds_copy_without_importing_replica_drift() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = tmp.path().join("runtime").join("replica").join("skills");
+        fs::create_dir_all(primary.join("hello")).unwrap();
+        fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
+
+        fs::create_dir_all(replica.join("hello")).unwrap();
+        fs::write(replica.join("hello/SKILL.md"), "# replica edit").unwrap();
+        fs::create_dir_all(replica.join("replica-only")).unwrap();
+        fs::write(replica.join("replica-only/SKILL.md"), "# drift").unwrap();
+
+        sync_library_replica(&primary, &replica).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(primary.join("hello/SKILL.md")).unwrap(),
+            "# primary"
+        );
+        assert_eq!(
+            fs::read_to_string(replica.join("hello/SKILL.md")).unwrap(),
+            "# primary"
+        );
+        assert!(!replica.join("replica-only").exists());
+    }
+
+    #[test]
+    fn sync_library_replica_reports_unreachable_parent_path() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(primary.join("SKILL.md"), "# primary").unwrap();
+        let blocked_parent = tmp.path().join("blocked");
+        fs::write(&blocked_parent, "not a directory").unwrap();
+        let replica = blocked_parent.join("skills");
+
+        let err = sync_library_replica(&primary, &replica).unwrap_err();
+
+        assert!(
+            err.to_string().contains("Failed to create parent dir"),
+            "{err}"
+        );
     }
 
     // ── remove_target ──

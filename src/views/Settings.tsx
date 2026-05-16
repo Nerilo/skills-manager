@@ -188,6 +188,7 @@ export function Settings() {
   const [wslLibraryReplicaPath, setWslLibraryReplicaPath] = useState("");
   const [savingWslRuntime, setSavingWslRuntime] = useState(false);
   const [removingWslRuntime, setRemovingWslRuntime] = useState<string | null>(null);
+  const [syncingWslReplica, setSyncingWslReplica] = useState<string | null>(null);
   // Agent path editing
   const [editingPathKey, setEditingPathKey] = useState<string | null>(null);
   const [editingPathValue, setEditingPathValue] = useState("");
@@ -497,6 +498,19 @@ export function Settings() {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
       setRemovingWslRuntime(null);
+    }
+  };
+
+  const handleSyncWslReplica = async (distroName: string) => {
+    setSyncingWslReplica(distroName);
+    try {
+      await api.syncWslLibraryReplica(distroName);
+      await refreshWslRuntimes();
+      toast.success(t("settings.wslReplicaSynced"));
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("settings.wslReplicaSyncFailed")));
+    } finally {
+      setSyncingWslReplica(null);
     }
   };
 
@@ -1237,19 +1251,35 @@ export function Settings() {
                               {runtime.library_replica_path}
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => void handleRemoveWslRuntime(runtime.distro_name)}
-                            disabled={removingWslRuntime === runtime.distro_name}
-                            className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-border-subtle px-2 text-[12px] font-medium text-muted transition-colors outline-none hover:text-red-600 disabled:opacity-60"
-                            title={t("settings.wslRemoveRuntime")}
-                          >
-                            {removingWslRuntime === runtime.distro_name ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <Trash2 className="w-3 h-3" />
-                            )}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => void handleSyncWslReplica(runtime.distro_name)}
+                              disabled={syncingWslReplica === runtime.distro_name || removingWslRuntime === runtime.distro_name}
+                              className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-accent-border bg-accent-bg px-2 text-[12px] font-medium text-accent transition-colors outline-none hover:border-accent disabled:opacity-60"
+                              title={t("settings.wslSyncReplica")}
+                            >
+                              {syncingWslReplica === runtime.distro_name ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <RefreshCw className="w-3 h-3" />
+                              )}
+                              {t("settings.wslSyncReplica")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRemoveWslRuntime(runtime.distro_name)}
+                              disabled={removingWslRuntime === runtime.distro_name || syncingWslReplica === runtime.distro_name}
+                              className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-border-subtle px-2 text-[12px] font-medium text-muted transition-colors outline-none hover:text-red-600 disabled:opacity-60"
+                              title={t("settings.wslRemoveRuntime")}
+                            >
+                              {removingWslRuntime === runtime.distro_name ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3 h-3" />
+                              )}
+                            </button>
+                          </div>
                         </div>
                       );
                     })}

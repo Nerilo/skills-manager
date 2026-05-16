@@ -3,11 +3,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::core::{
-    error::AppError,
-    scenario_service,
-    skill_store::SkillStore,
-    sync_engine, sync_metadata, tool_adapters,
-    tool_service,
+    central_repo, error::AppError, scenario_service, skill_store::SkillStore, sync_engine,
+    sync_metadata, tool_adapters, tool_service, wsl_runtime,
 };
 use serde::Serialize;
 
@@ -232,6 +229,23 @@ pub async fn set_skill_tool_toggle(
         }
 
         Ok(())
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn sync_wsl_library_replica(
+    distro_name: String,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = wsl_runtime::get_runtime_environment(&store, &distro_name)
+            .map_err(|err| AppError::invalid_input(err.to_string()))?;
+        let primary_library = central_repo::skills_dir();
+        let library_replica = PathBuf::from(runtime.library_replica_path);
+        sync_engine::sync_library_replica(&primary_library, &library_replica)
+            .map_err(|err| AppError::io(format!("Failed to sync Library Replica: {err}")))
     })
     .await?
 }

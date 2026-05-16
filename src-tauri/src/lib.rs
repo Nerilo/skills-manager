@@ -421,6 +421,7 @@ pub fn run() {
             commands::sync::unsync_skill_from_tool,
             commands::sync::get_skill_tool_toggles,
             commands::sync::set_skill_tool_toggle,
+            commands::sync::sync_wsl_library_replica,
             // Scan
             commands::scan::scan_local_skills,
             commands::scan::import_existing_skill,
