@@ -56,6 +56,7 @@ import { AgentIcon } from "../components/AgentIcon";
 import * as api from "../lib/tauri";
 import { applyTextSize } from "../lib/textScale";
 import { getErrorMessage } from "../lib/error";
+import { formatLocationLabel, locationFromWslRuntime, validateWslRuntimeInput } from "../lib/wsl";
 import type { AppUpdateInfo } from "../lib/tauri";
 import type { Theme } from "../hooks/useTheme";
 
@@ -158,7 +159,7 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 
 export function Settings() {
   const { t, i18n } = useTranslation();
-  const { tools, scenarios, refreshTools, openHelp } = useApp();
+  const { tools, scenarios, wslRuntimes, refreshTools, refreshWslRuntimes, openHelp } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
@@ -183,7 +184,6 @@ export function Settings() {
   const [textSize, setTextSize] = useState("default");
   const [skillsmpApiKey, setSkillsmpApiKey] = useState("");
   const [skillsmpSaving, setSkillsmpSaving] = useState(false);
-  const [wslRuntimes, setWslRuntimes] = useState<api.WslRuntimeEnvironment[]>([]);
   const [wslDistroName, setWslDistroName] = useState("");
   const [wslLibraryReplicaPath, setWslLibraryReplicaPath] = useState("");
   const [savingWslRuntime, setSavingWslRuntime] = useState(false);
@@ -203,12 +203,6 @@ export function Settings() {
   const [showMoreAgents, setShowMoreAgents] = useState(false);
 
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
-
-  const refreshWslRuntimes = useCallback(async () => {
-    if (!IS_WINDOWS) return;
-    const runtimes = await api.listWslRuntimeEnvironments();
-    setWslRuntimes(runtimes);
-  }, []);
 
   const startEditPath = useCallback((key: string, currentPath: string) => {
     setEditingPathKey(key);
@@ -330,8 +324,6 @@ export function Settings() {
       setCentralRepoPathInput(path);
     }).catch(() => {});
     api.getCentralRepoPathOverride().then(setCentralRepoPathOverride).catch(() => {});
-    refreshWslRuntimes().catch(() => {});
-
     (async () => {
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
       if (savedRemote) {
@@ -347,7 +339,7 @@ export function Settings() {
         api.setSettings("git_backup_remote_url", detectedRemote).catch(() => {});
       }
     })();
-  }, [refreshWslRuntimes]);
+  }, []);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -475,15 +467,16 @@ export function Settings() {
   };
 
   const handleAddWslRuntime = async () => {
+    const validationErrors = validateWslRuntimeInput(wslDistroName, wslLibraryReplicaPath);
+    if (validationErrors.length > 0) {
+      toast.error(t(validationErrors[0]));
+      return;
+    }
+
     setSavingWslRuntime(true);
     try {
-      const saved = await api.addWslRuntimeEnvironment(wslDistroName, wslLibraryReplicaPath);
-      setWslRuntimes((current) => {
-        const next = current.filter(
-          (runtime) => runtime.distro_name.toLowerCase() !== saved.distro_name.toLowerCase(),
-        );
-        return [...next, saved];
-      });
+      await api.addWslRuntimeEnvironment(wslDistroName, wslLibraryReplicaPath);
+      await refreshWslRuntimes();
       setWslDistroName("");
       setWslLibraryReplicaPath("");
       toast.success(t("settings.wslRuntimeSaved"));
@@ -498,7 +491,7 @@ export function Settings() {
     setRemovingWslRuntime(distroName);
     try {
       await api.removeWslRuntimeEnvironment(distroName);
-      setWslRuntimes((current) => current.filter((runtime) => runtime.distro_name !== distroName));
+      await refreshWslRuntimes();
       toast.success(t("settings.wslRuntimeRemoved"));
     } catch (error) {
       toast.error(getErrorMessage(error, t("common.error")));
@@ -1213,45 +1206,53 @@ export function Settings() {
                 </div>
                 {wslRuntimes.length > 0 ? (
                   <div className="space-y-1.5">
-                    {wslRuntimes.map((runtime) => (
-                      <div
-                        key={runtime.distro_name}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-[4px] border border-border-subtle bg-background px-2.5 py-2"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            {runtime.reachable ? (
-                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                            ) : (
-                              <Circle className="h-3.5 w-3.5 text-muted" />
-                            )}
-                            <span className="text-[13px] font-medium text-secondary">{runtime.distro_name}</span>
-                            <span className={cn(
-                              "text-[12px]",
-                              runtime.reachable ? "text-emerald-600" : "text-muted"
-                            )}>
-                              {runtime.reachable ? t("settings.wslReachable") : t("settings.wslUnreachable")}
-                            </span>
-                          </div>
-                          <p className="truncate text-[12px] font-mono text-muted" title={runtime.library_replica_path}>
-                            {runtime.library_replica_path}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleRemoveWslRuntime(runtime.distro_name)}
-                          disabled={removingWslRuntime === runtime.distro_name}
-                          className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-border-subtle px-2 text-[12px] font-medium text-muted transition-colors outline-none hover:text-red-600 disabled:opacity-60"
-                          title={t("settings.wslRemoveRuntime")}
+                    {wslRuntimes.map((runtime) => {
+                      const locationLabel = formatLocationLabel(locationFromWslRuntime(runtime), {
+                        windows: t("settings.locationWindows"),
+                        wsl: t("settings.locationWsl"),
+                      });
+                      return (
+                        <div
+                          key={runtime.distro_name}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-[4px] border border-border-subtle bg-background px-2.5 py-2"
                         >
-                          {removingWslRuntime === runtime.distro_name ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-3 h-3" />
-                          )}
-                        </button>
-                      </div>
-                    ))}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              {runtime.reachable ? (
+                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                              ) : (
+                                <Circle className="h-3.5 w-3.5 text-muted" />
+                              )}
+                              <span className="text-[13px] font-medium text-secondary">
+                                {locationLabel}
+                              </span>
+                              <span className={cn(
+                                "text-[12px]",
+                                runtime.reachable ? "text-emerald-600" : "text-muted"
+                              )}>
+                                {runtime.reachable ? t("settings.wslReachable") : t("settings.wslUnreachable")}
+                              </span>
+                            </div>
+                            <p className="truncate text-[12px] font-mono text-muted" title={runtime.library_replica_path}>
+                              {runtime.library_replica_path}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleRemoveWslRuntime(runtime.distro_name)}
+                            disabled={removingWslRuntime === runtime.distro_name}
+                            className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-border-subtle px-2 text-[12px] font-medium text-muted transition-colors outline-none hover:text-red-600 disabled:opacity-60"
+                            title={t("settings.wslRemoveRuntime")}
+                          >
+                            {removingWslRuntime === runtime.distro_name ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3 h-3" />
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="text-[12px] text-muted">{t("settings.wslRuntimeEmpty")}</p>

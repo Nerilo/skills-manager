@@ -2,10 +2,13 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { ManagedSkill, Project, Scenario, ToolInfo } from "../lib/tauri";
+import type { WslRuntimeEnvironment } from "../lib/wsl";
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
 import { applyTextSize } from "../lib/textScale";
 import { toast } from "sonner";
+
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
 
 interface AppState {
   scenarios: Scenario[];
@@ -14,6 +17,7 @@ interface AppState {
   /** Frontend-only "currently being viewed/edited" scenario. Persisted to localStorage. UI selection. */
   viewedScenario: Scenario | null;
   tools: ToolInfo[];
+  wslRuntimes: WslRuntimeEnvironment[];
   managedSkills: ManagedSkill[];
   projects: Project[];
   loading: boolean;
@@ -23,6 +27,7 @@ interface AppState {
   refreshAppData: () => Promise<void>;
   refreshScenarios: () => Promise<void>;
   refreshTools: () => Promise<void>;
+  refreshWslRuntimes: () => Promise<void>;
   refreshManagedSkills: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   setViewedScenarioId: (id: string) => void;
@@ -50,6 +55,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   });
   const [tools, setTools] = useState<ToolInfo[]>([]);
+  const [wslRuntimes, setWslRuntimes] = useState<WslRuntimeEnvironment[]>([]);
   const [managedSkills, setManagedSkills] = useState<ManagedSkill[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,6 +95,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [setTranslatedError]);
 
+  const refreshWslRuntimes = useCallback(async () => {
+    if (!IS_WINDOWS) {
+      setWslRuntimes([]);
+      return;
+    }
+
+    try {
+      const runtimes = await api.listWslRuntimeEnvironments();
+      setWslRuntimes(runtimes);
+    } catch (e) {
+      console.error("Failed to load WSL runtime environments:", e);
+    }
+  }, []);
+
   const refreshProjects = useCallback(async () => {
     try {
       const p = await api.getProjects();
@@ -113,9 +133,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshAppData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([refreshScenarios(), refreshTools(), refreshManagedSkills(), refreshProjects()]);
+    await Promise.all([
+      refreshScenarios(),
+      refreshTools(),
+      refreshWslRuntimes(),
+      refreshManagedSkills(),
+      refreshProjects(),
+    ]);
     setLoading(false);
-  }, [refreshManagedSkills, refreshProjects, refreshScenarios, refreshTools]);
+  }, [refreshManagedSkills, refreshProjects, refreshScenarios, refreshTools, refreshWslRuntimes]);
 
   const setViewedScenarioId = useCallback((id: string) => {
     setViewedScenarioIdState(id);
@@ -279,6 +305,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         activeScenario,
         viewedScenario,
         tools,
+        wslRuntimes,
         managedSkills,
         projects,
         loading,
@@ -288,6 +315,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshAppData,
         refreshScenarios,
         refreshTools,
+        refreshWslRuntimes,
         refreshManagedSkills,
         refreshProjects,
         setViewedScenarioId,

@@ -1,4 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { WslRuntimeEnvironment } from "./wsl";
+export type {
+  LibraryReplica,
+  LocationLabelVocabulary,
+  SkillLocation,
+  WindowsLocation,
+  WslAgentTarget,
+  WslLocation,
+  WslRuntimeEnvironment,
+} from "./wsl";
 
 // ── Types ──
 
@@ -404,12 +414,6 @@ export interface AppUpdateInfo {
 
 export const checkAppUpdate = () =>
   invoke<AppUpdateInfo>("check_app_update");
-
-export interface WslRuntimeEnvironment {
-  distro_name: string;
-  library_replica_path: string;
-  reachable: boolean;
-}
 
 export const listWslRuntimeEnvironments = () =>
   invoke<WslRuntimeEnvironment[]>("list_wsl_runtime_environments");
