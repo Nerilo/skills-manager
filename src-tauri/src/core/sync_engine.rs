@@ -112,7 +112,15 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
 }
 
 pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> Result<()> {
-    sync_skill(primary_library, library_replica, SyncMode::Copy).map(|_| ())
+    if let Some(parent) = library_replica.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create parent dir {:?}", parent))?;
+    }
+
+    ensure_dst_not_inside_src(primary_library, library_replica)?;
+    remove_target(library_replica)
+        .with_context(|| format!("Failed to remove existing target {:?}", library_replica))?;
+    copy_dir_recursive(primary_library, library_replica)
 }
 
 pub fn is_target_current(source: &Path, target: &Path, mode: SyncMode) -> bool {

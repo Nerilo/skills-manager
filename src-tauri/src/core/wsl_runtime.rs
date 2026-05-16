@@ -58,6 +58,7 @@ pub fn normalize_library_replica_path(distro_name: &str, input: &str) -> Result<
         if replica.is_empty() {
             bail!("Library Replica path must include a directory inside the distro");
         }
+        ensure_dedicated_replica_path(&replica)?;
         return Ok(format!(r"\\wsl.localhost\{distro_name}\{replica}"));
     }
 
@@ -284,7 +285,16 @@ fn normalize_unc_path(distro_name: &str, raw: &str) -> Result<String> {
     if replica.is_empty() {
         bail!("Library Replica path must include a directory inside the distro");
     }
+    ensure_dedicated_replica_path(replica)?;
     Ok(format!(r"\\wsl.localhost\{distro_name}\{replica}"))
+}
+
+fn ensure_dedicated_replica_path(replica: &str) -> Result<()> {
+    let depth = replica.split('\\').filter(|part| !part.is_empty()).count();
+    if depth < 3 {
+        bail!("Library Replica path must include a dedicated replica directory, not a home, mount, or distro root");
+    }
+    Ok(())
 }
 
 fn normalize_agent_target_path(distro_name: &str, raw: &str) -> Result<String> {
@@ -397,6 +407,16 @@ mod tests {
         let err = normalize_library_replica_path("Ubuntu", "Ubuntu:/").unwrap_err();
 
         assert!(err.to_string().contains("Library Replica path"));
+    }
+
+    #[test]
+    fn rejects_home_directory_as_library_replica_path() {
+        let err = normalize_library_replica_path("Ubuntu", "Ubuntu:/home/me").unwrap_err();
+
+        assert!(
+            err.to_string().contains("dedicated replica directory"),
+            "{err}"
+        );
     }
 
     #[test]
