@@ -1425,7 +1425,7 @@ export function InstallSkills() {
                               {primaryLocation ? (
                                 <div className="flex min-w-0 items-center gap-2">
                                   <span className="inline-flex shrink-0 rounded-[4px] border border-border-subtle bg-surface px-1.5 py-px text-[13px] font-medium text-tertiary">
-                                    {primaryLocation.tool}
+                                    {primaryLocation.location_label}
                                   </span>
                                   <code className="block min-w-0 truncate text-[13px] text-tertiary">
                                     {primaryLocation.found_path}
@@ -1458,7 +1458,7 @@ export function InstallSkills() {
                                 {otherLocations.map((location) => (
                                   <div key={location.id} className="flex min-w-0 items-center gap-2">
                                     <span className="inline-flex shrink-0 rounded-[4px] border border-border-subtle bg-surface px-1.5 py-px text-[13px] font-medium text-tertiary">
-                                      {location.tool}
+                                      {location.location_label}
                                     </span>
                                     <code className="block min-w-0 truncate text-[13px] text-muted">
                                       {location.found_path}

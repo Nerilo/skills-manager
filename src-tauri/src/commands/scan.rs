@@ -58,7 +58,7 @@ pub async fn scan_local_skills(
             all_targets.iter().map(|t| t.target_path.clone()).collect();
         let managed_skills = store.get_all_skills().map_err(AppError::db)?;
 
-        let adapters = tool_adapters::all_tool_adapters(&store);
+        let adapters = tool_adapters::discovery_tool_adapters(&store);
         let mut plan = scanner::scan_local_skills_with_adapters(&managed_paths, &adapters)
             .map_err(AppError::io)?;
 

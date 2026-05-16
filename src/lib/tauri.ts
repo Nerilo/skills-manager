@@ -96,7 +96,14 @@ export interface Scenario {
 export interface DiscoveredGroup {
   name: string;
   fingerprint: string | null;
-  locations: { id: string; tool: string; found_path: string }[];
+  locations: {
+    id: string;
+    tool: string;
+    found_path: string;
+    location_kind: "windows" | "wsl";
+    wsl_distro_name: string | null;
+    location_label: string;
+  }[];
   imported: boolean;
   found_at: number;
 }

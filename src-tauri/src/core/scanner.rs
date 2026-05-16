@@ -7,6 +7,7 @@ use super::content_hash;
 use super::skill_metadata;
 use super::skill_store::DiscoveredSkillRecord;
 use super::tool_adapters;
+use super::wsl_runtime;
 
 pub struct ScanPlan {
     pub tools_scanned: usize,
@@ -28,6 +29,9 @@ pub struct DiscoveredLocation {
     pub id: String,
     pub tool: String,
     pub found_path: String,
+    pub location_kind: String,
+    pub wsl_distro_name: Option<String>,
+    pub location_label: String,
 }
 
 /// Directories to skip during recursive scans (internal/tool-specific metadata).
@@ -246,12 +250,39 @@ pub fn group_discovered(records: &[DiscoveredSkillRecord]) -> Vec<DiscoveredGrou
             id: rec.id.clone(),
             tool: rec.tool.clone(),
             found_path: rec.found_path.clone(),
+            location_kind: location_kind(&rec.tool).to_string(),
+            wsl_distro_name: wsl_distro_name(&rec.tool).map(str::to_string),
+            location_label: location_label(&rec.tool),
         });
     }
 
     let mut result: Vec<_> = groups.into_values().collect();
     result.sort_by(|a, b| a.name.cmp(&b.name));
     result
+}
+
+fn location_kind(tool: &str) -> &'static str {
+    if wsl_runtime::parse_wsl_tool_key(tool).is_some() {
+        "wsl"
+    } else {
+        "windows"
+    }
+}
+
+fn wsl_distro_name(tool: &str) -> Option<&str> {
+    wsl_runtime::parse_wsl_tool_key(tool).map(|(distro_name, _)| distro_name)
+}
+
+fn location_label(tool: &str) -> String {
+    let Some((distro_name, target_key)) = wsl_runtime::parse_wsl_tool_key(tool) else {
+        return format!("Windows · {tool}");
+    };
+    let target_label = if target_key == "library_replica" {
+        "Library Replica".to_string()
+    } else {
+        target_key.replace('_', " ")
+    };
+    format!("WSL · {distro_name} · {target_label}")
 }
 
 #[cfg(test)]
@@ -375,6 +406,34 @@ mod tests {
     }
 
     #[test]
+    fn scans_configured_wsl_adapter_paths() {
+        let tmp = tempdir().unwrap();
+        write_skill(&tmp.path().join("wsl-only-skill"));
+
+        let adapter = tool_adapters::ToolAdapter {
+            key: "wsl:Ubuntu:library_replica".into(),
+            display_name: "Library Replica (Ubuntu)".into(),
+            relative_skills_dir: String::new(),
+            relative_detect_dir: String::new(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: Some(tmp.path().to_string_lossy().to_string()),
+            is_custom: true,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        };
+
+        let plan = scan_local_skills_with_adapters(&[], &[adapter]).unwrap();
+        let groups = group_discovered(&plan.discovered);
+
+        assert_eq!(plan.skills_found, 1);
+        assert_eq!(groups[0].locations[0].location_kind, "wsl");
+        assert_eq!(
+            groups[0].locations[0].wsl_distro_name.as_deref(),
+            Some("Ubuntu")
+        );
+    }
+
+    #[test]
     fn additional_scan_dirs_scan_concrete_skills_roots() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("skills");
@@ -460,5 +519,30 @@ mod tests {
         let groups = group_discovered(&records);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].locations.len(), 2);
+    }
+
+    #[test]
+    fn grouping_labels_wsl_locations_by_distro_and_location() {
+        let records = vec![DiscoveredSkillRecord {
+            id: "1".into(),
+            tool: "wsl:Ubuntu:library_replica".into(),
+            found_path: r"\\wsl.localhost\Ubuntu\home\me\.codex\skills\demo".into(),
+            name_guess: Some("demo".into()),
+            fingerprint: Some("hash-a".into()),
+            found_at: 10,
+            imported_skill_id: None,
+        }];
+
+        let groups = group_discovered(&records);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].locations[0].location_kind, "wsl");
+        assert_eq!(
+            groups[0].locations[0].wsl_distro_name.as_deref(),
+            Some("Ubuntu")
+        );
+        assert_eq!(
+            groups[0].locations[0].location_label,
+            r"WSL · Ubuntu · Library Replica"
+        );
     }
 }

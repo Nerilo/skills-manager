@@ -311,8 +311,13 @@ mod tests {
         fs::write(src.join("SKILL.md"), "# hello").unwrap();
 
         let mode = sync_skill(&src, &tgt, SyncMode::Symlink).unwrap();
-        assert!(matches!(mode, SyncMode::Symlink));
-        assert!(tgt.is_symlink());
+        // Windows requires SeCreateSymbolicLinkPrivilege (Admin or Developer Mode).
+        // Production code gracefully falls back to Copy; accept both.
+        if tgt.is_symlink() {
+            assert!(matches!(mode, SyncMode::Symlink));
+        } else {
+            assert!(matches!(mode, SyncMode::Copy));
+        }
     }
 
     #[test]

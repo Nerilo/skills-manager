@@ -695,6 +695,32 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
     adapters
 }
 
+pub fn discovery_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAdapter> {
+    let mut adapters = all_tool_adapters(store);
+    adapters.extend(wsl_library_replica_scan_adapters(store));
+    adapters
+}
+
+fn wsl_library_replica_scan_adapters(
+    store: &crate::core::skill_store::SkillStore,
+) -> Vec<ToolAdapter> {
+    wsl_runtime::list_runtime_environments(store)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|runtime| ToolAdapter {
+            key: wsl_runtime::wsl_tool_key(&runtime.distro_name, "library_replica"),
+            display_name: format!("Library Replica ({})", runtime.distro_name),
+            relative_skills_dir: String::new(),
+            relative_detect_dir: String::new(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: Some(runtime.library_replica_path),
+            is_custom: true,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        })
+        .collect()
+}
+
 fn wsl_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAdapter> {
     let runtimes = wsl_runtime::list_runtime_environments(store).unwrap_or_default();
     let base_adapters = all_windows_tool_adapters(store);
@@ -703,28 +729,40 @@ fn wsl_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAd
     for runtime_status in runtimes {
         let runtime = wsl_runtime::WslRuntimeEnvironment {
             distro_name: runtime_status.distro_name.clone(),
-            library_replica_path: runtime_status.library_replica_path,
+            library_replica_path: runtime_status.library_replica_path.clone(),
             agent_targets: runtime_status.agent_targets,
         };
-        for base in &base_adapters {
-            let configured = wsl_runtime::configured_agent_target(&runtime, &base.key);
-            let skills_dir = configured.and_then(|target| target.skills_dir).or_else(|| {
-                wsl_runtime::resolve_agent_target_path(&runtime, &base.relative_skills_dir).ok()
+
+        for configured in &runtime.agent_targets {
+            let base = base_adapters
+                .iter()
+                .find(|adapter| adapter.key == configured.key);
+            let skills_dir = configured.skills_dir.clone().or_else(|| {
+                base.and_then(|adapter| {
+                    wsl_runtime::resolve_agent_target_path(&runtime, &adapter.relative_skills_dir)
+                        .ok()
+                })
             });
             let Some(skills_dir) = skills_dir else {
                 continue;
             };
+            let display_name = base
+                .map(|adapter| adapter.display_name.clone())
+                .unwrap_or_else(|| configured.key.clone());
 
             adapters.push(ToolAdapter {
-                key: wsl_runtime::wsl_tool_key(&runtime.distro_name, &base.key),
-                display_name: format!("{} ({})", base.display_name, runtime.distro_name),
-                relative_skills_dir: base.relative_skills_dir.clone(),
+                key: wsl_runtime::wsl_tool_key(&runtime.distro_name, &configured.key),
+                display_name: format!("{} ({})", display_name, runtime.distro_name),
+                relative_skills_dir: base
+                    .map(|adapter| adapter.relative_skills_dir.clone())
+                    .unwrap_or_default(),
                 relative_detect_dir: String::new(),
                 additional_scan_dirs: vec![],
                 override_skills_dir: Some(skills_dir),
-                is_custom: base.is_custom,
-                recursive_scan: base.recursive_scan,
-                project_relative_skills_dir: base.project_relative_skills_dir.clone(),
+                is_custom: base.map(|adapter| adapter.is_custom).unwrap_or(true),
+                recursive_scan: base.map(|adapter| adapter.recursive_scan).unwrap_or(false),
+                project_relative_skills_dir: base
+                    .and_then(|adapter| adapter.project_relative_skills_dir.clone()),
             });
         }
     }
@@ -874,7 +912,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\skills"}]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\skills","agent_targets":[{"key":"codex","enabled":true}] }]"#,
             )
             .unwrap();
 
@@ -916,5 +954,69 @@ mod tests {
         assert!(!super::enabled_installed_adapters(&store)
             .iter()
             .any(|adapter| adapter.key == "wsl:Ubuntu:codex"));
+    }
+
+    #[test]
+    fn wsl_library_replica_is_discovery_only_not_a_tool_adapter() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-library-only.db")).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.codex\\skills"}]"#,
+            )
+            .unwrap();
+
+        let adapters = all_tool_adapters(&store);
+        let discovery_adapters = super::discovery_tool_adapters(&store);
+
+        assert!(!adapters
+            .iter()
+            .any(|adapter| adapter.key == "wsl:Ubuntu:library_replica"));
+        assert!(discovery_adapters
+            .iter()
+            .any(|adapter| adapter.key == "wsl:Ubuntu:library_replica"));
+        assert!(!discovery_adapters
+            .iter()
+            .any(|adapter| adapter.key == "wsl:Ubuntu:codex"));
+    }
+
+    #[test]
+    fn wsl_library_replica_is_never_an_enabled_sync_adapter() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-replica-not-sync.db")).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.codex\\skills"}]"#,
+            )
+            .unwrap();
+
+        assert!(!super::enabled_installed_adapters(&store)
+            .iter()
+            .any(|adapter| adapter.key == "wsl:Ubuntu:library_replica"));
+    }
+
+    #[test]
+    fn wsl_discovery_includes_explicit_agent_target_paths() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-agent-targets.db")).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.codex\\skills","agent_targets":[{"key":"codex","enabled":true,"skills_dir":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.agents\\skills"}]}]"#,
+            )
+            .unwrap();
+
+        let adapters = all_tool_adapters(&store);
+        let wsl_codex = adapters
+            .iter()
+            .find(|adapter| adapter.key == "wsl:Ubuntu:codex")
+            .expect("explicit WSL Codex target should be scanned");
+
+        assert_eq!(
+            wsl_codex.skills_dir().to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu\home\me\.agents\skills"
+        );
     }
 }
