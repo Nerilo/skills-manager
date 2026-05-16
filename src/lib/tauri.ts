@@ -62,6 +62,9 @@ export interface SkillTarget {
 export interface SkillToolToggle {
   tool: string;
   display_name: string;
+  skills_dir: string;
+  runtime_environment: "windows" | "wsl";
+  wsl_distro_name: string | null;
   installed: boolean;
   globally_enabled: boolean;
   enabled: boolean;
@@ -147,6 +150,9 @@ export interface Project {
 export interface ProjectAgentTarget {
   key: string;
   display_name: string;
+  skills_dir: string;
+  runtime_environment: "windows" | "wsl";
+  wsl_distro_name: string | null;
   enabled: boolean;
   installed: boolean;
   is_custom: boolean;

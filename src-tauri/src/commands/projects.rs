@@ -5,7 +5,9 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
-use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
+use crate::core::{
+    error::AppError, installer, project_scanner, skill_distribution, sync_engine, tool_adapters,
+};
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -42,6 +44,9 @@ pub struct ProjectSkillDocumentDto {
 pub struct ProjectAgentTargetDto {
     pub key: String,
     pub display_name: String,
+    pub skills_dir: String,
+    pub runtime_environment: String,
+    pub wsl_distro_name: Option<String>,
     pub enabled: bool,
     pub installed: bool,
     pub is_custom: bool,
@@ -144,6 +149,9 @@ fn project_agent_targets_for_record(
         return vec![ProjectAgentTargetDto {
             key: linked_workspace_agent_key(rec),
             display_name: linked_workspace_agent_name(rec),
+            skills_dir: rec.path.clone(),
+            runtime_environment: "windows".to_string(),
+            wsl_distro_name: None,
             enabled: true,
             installed: true,
             is_custom: false,
@@ -163,10 +171,19 @@ fn project_agent_targets_for_record(
         .into_iter()
         .map(|config| {
             let adapter = tool_adapters::find_adapter_with_store(store, &config.key);
+            let wsl_key = crate::core::wsl_runtime::parse_wsl_tool_key(&config.key);
             ProjectAgentTargetDto {
                 enabled: !disabled_tools.contains(&config.key),
                 installed: adapter.as_ref().map(|a| a.is_installed()).unwrap_or(false),
                 is_custom: adapter.as_ref().map(|a| a.is_custom).unwrap_or(false),
+                skills_dir: adapter
+                    .as_ref()
+                    .map(|a| a.skills_dir().to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                runtime_environment: wsl_key
+                    .map(|_| "wsl".to_string())
+                    .unwrap_or_else(|| "windows".to_string()),
+                wsl_distro_name: wsl_key.map(|(distro_name, _)| distro_name.to_string()),
                 key: config.key,
                 display_name: config.display_name,
             }
@@ -932,7 +949,6 @@ pub async fn export_skill_to_project(
         let dir_name = slugify_skill_dir_name(&skill.name);
         ensure_safe_skill_relative_path(&dir_name)?;
 
-        let source = PathBuf::from(&skill.central_path);
         let agent_keys = agents.filter(|items| !items.is_empty()).unwrap_or_else(|| {
             if project.workspace_type == "linked" {
                 vec![linked_workspace_agent_key(&project)]
@@ -967,6 +983,7 @@ pub async fn export_skill_to_project(
         for agent_key in &agent_keys {
             let (skills_root, _) = resolve_agent_skills_roots(&store, &project, agent_key)
                 .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
+            let source = skill_distribution::source_for_target(&store, &skill, agent_key)?;
             let target_dir = skills_root.join(&dir_name);
             std::fs::create_dir_all(&skills_root)?;
             sync_engine::sync_skill(&source, &target_dir, sync_engine::SyncMode::Copy)
@@ -1021,7 +1038,7 @@ pub async fn update_project_skill_from_center(
             return Err(AppError::invalid_input("Invalid skill directory path"));
         }
 
-        let source = PathBuf::from(&managed.central_path);
+        let source = skill_distribution::source_for_target(&store, managed, &agent)?;
         sync_engine::sync_skill(&source, &target_path, sync_engine::SyncMode::Copy)
             .map_err(AppError::io)?;
         Ok(())

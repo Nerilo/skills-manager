@@ -81,6 +81,11 @@ function getDefaultExportAgents(targets: ProjectAgentTarget[], savedValue?: stri
   return Array.from(new Set((prioritized.length > 0 ? prioritized : fallback).slice(0, 3)));
 }
 
+function projectTargetLocationLabel(target: ProjectAgentTarget): string | null {
+  if (target.runtime_environment !== "wsl") return null;
+  return `WSL · ${target.wsl_distro_name ?? ""} · ${target.skills_dir}`;
+}
+
 function getSyncStatusMeta(t: (key: string) => string, status: ProjectSkill["sync_status"]) {
   switch (status) {
     case "in_sync":
@@ -322,9 +327,18 @@ export function ProjectDetail() {
     isItemActive: (s) => s.enabledCount === s.totalCount,
   });
 
-  const exportTargets = useMemo(() => {
+  const exportTargets = useMemo<ProjectAgentTarget[]>(() => {
     if (projectAgentTargets.length > 0) return projectAgentTargets;
-    return [{ key: "claude_code", display_name: "Claude Code", enabled: true, installed: true, is_custom: false }];
+    return [{
+      key: "claude_code",
+      display_name: "Claude Code",
+      skills_dir: "",
+      runtime_environment: "windows",
+      wsl_distro_name: null,
+      enabled: true,
+      installed: true,
+      is_custom: false,
+    }];
   }, [projectAgentTargets]);
 
   const projectSkillDirNamesByAgent = useMemo(() => {
@@ -1436,6 +1450,7 @@ function ProjectSkillDetailPanel({
     return {
       key: target.key,
       displayName: target.display_name,
+      locationLabel: projectTargetLocationLabel(target),
       enabled: Boolean(variant),
       isAvailable: target.installed && target.enabled,
       disabled: (!variant && (!target.installed || !target.enabled)),
@@ -1456,6 +1471,9 @@ function ProjectSkillDetailPanel({
           targets={getAgentDotTargets(skill.variants).map((t) => ({
             key: t.key,
             display_name: t.display_name,
+            skills_dir: "",
+            runtime_environment: "windows",
+            wsl_distro_name: null,
             enabled: true,
             installed: true,
             is_custom: false,
@@ -1682,7 +1700,7 @@ function AddFromLibraryDialog({
   const selectedTargetLabels = useMemo(
     () => exportTargets
       .filter((target) => selectedAgents.includes(target.key))
-      .map((target) => target.display_name),
+      .map((target) => projectTargetLocationLabel(target) ?? target.display_name),
     [exportTargets, selectedAgents]
   );
 
@@ -1833,7 +1851,9 @@ function AddFromLibraryDialog({
                             displayName={target.display_name}
                             className="h-5 w-5 rounded-[5px]"
                           />
-                          {target.display_name}
+                          <span className="max-w-[180px] truncate" title={projectTargetLocationLabel(target) ?? target.display_name}>
+                            {projectTargetLocationLabel(target) ?? target.display_name}
+                          </span>
                         </button>
                       );
                     })}
@@ -1873,7 +1893,9 @@ function AddFromLibraryDialog({
                                 displayName={target.display_name}
                                 className="h-5 w-5 rounded-[5px]"
                               />
-                              {target.display_name}
+                              <span className="max-w-[180px] truncate" title={projectTargetLocationLabel(target) ?? target.display_name}>
+                                {projectTargetLocationLabel(target) ?? target.display_name}
+                              </span>
                             </button>
                             );
                           })}

@@ -12,7 +12,7 @@ use crate::core::{
     install_cancel::InstallCancelRegistry,
     installer,
     repo_lock::RepoLock,
-    scanner,
+    scanner, skill_distribution,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
@@ -1724,7 +1724,6 @@ fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppErro
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
-    let source = PathBuf::from(&skill.central_path);
     let targets = store
         .get_targets_for_skill(skill_id)
         .map_err(AppError::db)?;
@@ -1734,6 +1733,7 @@ fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppErro
             continue;
         }
 
+        let source = skill_distribution::source_for_target(store, &skill, &target.tool)?;
         sync_engine::sync_skill(
             &source,
             Path::new(&target.target_path),

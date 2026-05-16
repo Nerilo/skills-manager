@@ -181,6 +181,9 @@ function SkillDetailPanelContent({
   const toggleItems: AgentToggleItem[] = (toolToggles ?? []).map((toggle) => ({
     key: toggle.tool,
     displayName: toggle.display_name,
+    locationLabel: toggle.runtime_environment === "wsl"
+      ? `WSL · ${toggle.wsl_distro_name ?? ""} · ${toggle.skills_dir}`
+      : null,
     enabled: toggle.enabled,
     isAvailable: toggle.installed && toggle.globally_enabled,
     disabled: !toggle.installed || !toggle.globally_enabled,

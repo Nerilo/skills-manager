@@ -7,6 +7,7 @@ import { AgentIcon } from "./AgentIcon";
 export interface AgentToggleItem {
   key: string;
   displayName: string;
+  locationLabel?: string | null;
   enabled: boolean;
   isAvailable: boolean;
   disabled?: boolean;
@@ -127,8 +128,15 @@ function AgentToggle({
         displayName={item.displayName}
         className="h-5 w-5 rounded-[5px]"
       />
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-secondary">
-        {item.displayName}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12.5px] font-medium text-secondary">
+          {item.displayName}
+        </span>
+        {item.locationLabel && (
+          <span className="block truncate text-[11px] text-muted" title={item.locationLabel}>
+            {item.locationLabel}
+          </span>
+        )}
       </span>
       {item.badgeLabel && (
         <span className="shrink-0 rounded-full border border-border-subtle bg-bg-secondary px-1.5 py-0.5 text-[11px] text-muted">

@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use super::{
     error::AppError,
+    skill_distribution,
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
-    sync_engine, tool_adapters,
-    tool_service,
+    sync_engine, tool_adapters, tool_service,
 };
 
 #[derive(Debug, Clone)]
@@ -74,10 +74,12 @@ pub fn collect_scenario_sync_targets(
     let mut targets = Vec::new();
 
     for skill in &skills {
-        let source = PathBuf::from(&skill.central_path);
-        let target_name = sync_engine::target_dir_name(&source, &skill.name);
-        let adapters = enabled_installed_adapters_for_scenario_skill(store, scenario_id, &skill.id)?;
+        let central_source = PathBuf::from(&skill.central_path);
+        let target_name = sync_engine::target_dir_name(&central_source, &skill.name);
+        let adapters =
+            enabled_installed_adapters_for_scenario_skill(store, scenario_id, &skill.id)?;
         for adapter in &adapters {
+            let source = skill_distribution::source_for_target(store, skill, &adapter.key)?;
             let target = adapter.skills_dir().join(&target_name);
             let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
             targets.push(ScenarioSyncTarget {
@@ -263,7 +265,9 @@ pub fn apply_scenario_to_default(store: &SkillStore, scenario_id: &str) -> Resul
         }
     }
 
-    store.set_active_scenario(scenario_id).map_err(AppError::db)?;
+    store
+        .set_active_scenario(scenario_id)
+        .map_err(AppError::db)?;
     sync_desired_targets(store, &desired_targets)
 }
 
@@ -274,13 +278,14 @@ pub fn sync_skill_to_active_scenario(
 ) -> Result<(), AppError> {
     if let Ok(Some(active_id)) = store.get_active_scenario_id() {
         if active_id == scenario_id {
-            let adapters = enabled_installed_adapters_for_scenario_skill(store, scenario_id, skill_id)?;
+            let adapters =
+                enabled_installed_adapters_for_scenario_skill(store, scenario_id, skill_id)?;
             let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
             let Ok(Some(skill)) = store.get_skill_by_id(skill_id) else {
                 return Ok(());
             };
-            let source = PathBuf::from(&skill.central_path);
-            let target_name = sync_engine::target_dir_name(&source, &skill.name);
+            let central_source = PathBuf::from(&skill.central_path);
+            let target_name = sync_engine::target_dir_name(&central_source, &skill.name);
             let old_targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
             for adapter in &adapters {
                 if let Some(old) = old_targets.iter().find(|t| t.tool == adapter.key) {
@@ -294,7 +299,9 @@ pub fn sync_skill_to_active_scenario(
                 }
 
                 let target = adapter.skills_dir().join(&target_name);
-                let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
+                let source = skill_distribution::source_for_target(store, &skill, &adapter.key)?;
+                let mode =
+                    sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
                 match sync_engine::sync_skill(&source, &target, mode) {
                     Ok(actual_mode) => {
                         let now = chrono::Utc::now().timestamp_millis();
@@ -338,7 +345,9 @@ pub fn ensure_default_startup_scenario(store: &SkillStore) -> Result<(), AppErro
             created_at: now,
             updated_at: now,
         };
-        store.insert_scenario(&default_scenario).map_err(AppError::db)?;
+        store
+            .insert_scenario(&default_scenario)
+            .map_err(AppError::db)?;
         scenarios.push(default_scenario);
     }
 
@@ -372,7 +381,8 @@ pub fn sync_active_scenario_to_tool(store: &SkillStore, tool_key: &str) {
             return;
         };
         for skill_id in skill_ids {
-            if let Ok(adapters) = enabled_installed_adapters_for_scenario_skill(store, &active_id, &skill_id)
+            if let Ok(adapters) =
+                enabled_installed_adapters_for_scenario_skill(store, &active_id, &skill_id)
             {
                 if adapters.iter().any(|adapter| adapter.key == tool_key) {
                     let _ = sync_skill_to_active_scenario(store, &active_id, &skill_id);
@@ -409,7 +419,7 @@ pub fn sync_single_skill_to_tool(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
 
-    let source = PathBuf::from(&skill.central_path);
+    let source = skill_distribution::source_for_target(store, &skill, tool)?;
     let target = adapter
         .skills_dir()
         .join(sync_engine::target_dir_name(&source, &skill.name));
@@ -431,4 +441,73 @@ pub fn sync_single_skill_to_tool(
 
     store.insert_target(&target_record).map_err(AppError::db)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::skill_store::SkillRecord;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn sample_skill(central_path: &std::path::Path) -> SkillRecord {
+        SkillRecord {
+            id: "skill-1".to_string(),
+            name: "demo-skill".to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    #[test]
+    fn wsl_target_sync_uses_library_replica_as_source() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-sync.db")).unwrap();
+        let central_skill = tmp.path().join("primary").join("demo-skill");
+        let replica_skill = tmp.path().join("replica").join("demo-skill");
+        let target_root = tmp.path().join("wsl-agent-skills");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::create_dir_all(&replica_skill).unwrap();
+        fs::write(central_skill.join("SKILL.md"), "# primary").unwrap();
+        fs::write(replica_skill.join("SKILL.md"), "# replica").unwrap();
+        store.insert_skill(&sample_skill(&central_skill)).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": tmp.path().join("replica").to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "codex",
+                        "enabled": true,
+                        "skills_dir": target_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        sync_single_skill_to_tool(&store, "skill-1", "wsl:Ubuntu:codex").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target_root.join("demo-skill").join("SKILL.md")).unwrap(),
+            "# replica"
+        );
+    }
 }

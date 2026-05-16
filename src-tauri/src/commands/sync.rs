@@ -12,6 +12,9 @@ use serde::Serialize;
 pub struct SkillToolToggleDto {
     pub tool: String,
     pub display_name: String,
+    pub skills_dir: String,
+    pub runtime_environment: String,
+    pub wsl_distro_name: Option<String>,
     pub installed: bool,
     pub globally_enabled: bool,
     pub enabled: bool,
@@ -143,6 +146,7 @@ pub async fn get_skill_tool_toggles(
         Ok(all_adapters
             .into_iter()
             .map(|adapter| {
+                let wsl_key = wsl_runtime::parse_wsl_tool_key(&adapter.key);
                 let globally_enabled = !disabled.contains(&adapter.key);
                 let available = adapter.is_installed() && globally_enabled;
                 SkillToolToggleDto {
@@ -154,6 +158,11 @@ pub async fn get_skill_tool_toggles(
                     },
                     tool: adapter.key.clone(),
                     display_name: adapter.display_name.clone(),
+                    skills_dir: adapter.skills_dir().to_string_lossy().to_string(),
+                    runtime_environment: wsl_key
+                        .map(|_| "wsl".to_string())
+                        .unwrap_or_else(|| "windows".to_string()),
+                    wsl_distro_name: wsl_key.map(|(distro_name, _)| distro_name.to_string()),
                     installed: adapter.is_installed(),
                     globally_enabled,
                 }
