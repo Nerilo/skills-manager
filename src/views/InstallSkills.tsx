@@ -210,6 +210,26 @@ export function InstallSkills() {
     }
   }, [t]);
 
+  // Silent variant used after install/import. Never surfaces a toast or
+  // new error state — failure here must not mask the install success.
+  // Clears any stale localError on success so successful operations don't
+  // leave previous error banners behind.
+  const runScanSilent = useCallback(async () => {
+    try {
+      const result = await api.scanLocalSkills();
+      setScanResult(result);
+      setLocalError(null);
+    } catch (error: unknown) {
+      console.warn("silent scan failed:", error);
+    }
+  }, []);
+
+  const warnRejected = (results: PromiseSettledResult<unknown>[], label: string) => {
+    for (const r of results) {
+      if (r.status === "rejected") console.warn(`${label} failed:`, r.reason);
+    }
+  };
+
   useEffect(() => {
     if (activeTab !== "market") return;
 
@@ -286,20 +306,27 @@ export function InstallSkills() {
     const toastId = toast.loading(t("install.toast.installing", { name }));
     try {
       await api.installLocal(sourcePath);
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      await runScan();
-      toast.success(t("install.toast.success", { name }), {
-        id: toastId,
-        action: {
-          label: t("install.toast.view"),
-          onClick: () => goToSkill(name),
-        },
-      });
     } catch (e) {
-      const message = (e as Error)?.toString?.() || t("common.error");
+      const message = getErrorMessage(e, t("common.error"));
       setLocalError(message);
       toast.error(message, { id: toastId });
+      return;
     }
+    // Install succeeded — post-install refresh is best-effort and must not
+    // surface as an install failure.
+    const results = await Promise.allSettled([
+      refreshScenarios(),
+      refreshManagedSkills(),
+      runScanSilent(),
+    ]);
+    warnRejected(results, "post-install refresh");
+    toast.success(t("install.toast.success", { name }), {
+      id: toastId,
+      action: {
+        label: t("install.toast.view"),
+        onClick: () => goToSkill(name),
+      },
+    });
   };
 
   const handleLocalFolderInstall = async () => {
@@ -528,12 +555,19 @@ export function InstallSkills() {
   const handleImportDiscovered = async (sourcePath: string, name: string) => {
     setImportingPaths((prev) => new Set(prev).add(sourcePath));
     try {
-      await api.importExistingSkill(sourcePath, name);
+      try {
+        await api.importExistingSkill(sourcePath, name);
+      } catch (error: unknown) {
+        toast.error(getErrorMessage(error, t("common.error")));
+        return;
+      }
       toast.success(t("install.scan.importedOne", { name }));
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      await runScan();
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
+      const results = await Promise.allSettled([
+        refreshScenarios(),
+        refreshManagedSkills(),
+        runScanSilent(),
+      ]);
+      warnRejected(results, "post-import refresh");
     } finally {
       setImportingPaths((prev) => {
         const next = new Set(prev);
@@ -546,12 +580,19 @@ export function InstallSkills() {
   const handleImportAllDiscovered = async () => {
     setImportingAll(true);
     try {
-      await api.importAllDiscovered();
+      try {
+        await api.importAllDiscovered();
+      } catch (error: unknown) {
+        toast.error(getErrorMessage(error, t("common.error")));
+        return;
+      }
       toast.success(t("install.scan.importedAll"));
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
-      await runScan();
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
+      const results = await Promise.allSettled([
+        refreshScenarios(),
+        refreshManagedSkills(),
+        runScanSilent(),
+      ]);
+      warnRejected(results, "post-import refresh");
     } finally {
       setImportingAll(false);
     }

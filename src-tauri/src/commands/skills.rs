@@ -1051,10 +1051,19 @@ fn managed_skill_to_dto(
     let scenario_ids = store.get_scenarios_for_skill(&skill.id).unwrap_or_default();
     let tags = tags_map.get(&skill.id).cloned().unwrap_or_default();
 
+    // Prefer description from SKILL.md so the list view reflects edits made
+    // directly on disk (file watcher emits a change event; this read serves
+    // the fresh value). Keep `name` on the DB value to avoid drift with
+    // sync target directory names.
+    let description = skill_metadata::parse_skill_md(Path::new(&skill.central_path))
+        .description
+        .filter(|s| !s.trim().is_empty())
+        .or(skill.description);
+
     ManagedSkillDto {
         id: skill.id,
         name: skill.name,
-        description: skill.description,
+        description,
         source_type: skill.source_type,
         source_ref: skill.source_ref,
         source_ref_resolved: skill.source_ref_resolved,

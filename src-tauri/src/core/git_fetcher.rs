@@ -706,6 +706,17 @@ pub fn find_skill_dir(repo_dir: &Path, skill_id: Option<&str>) -> Result<PathBuf
             return Ok(in_skills);
         }
 
+        // Prefer the unified agent skills location over provider-specific
+        // variants (e.g. `.cursor/skills`, `.claude/skills`). Repos that
+        // publish per-provider variants typically also ship a generic copy
+        // at `.agents/skills`; the recursive fallback below is non-deterministic
+        // across filesystems, so without this check we may pick an arbitrary
+        // provider's transformed variant.
+        let in_agents = repo_dir.join(".agents").join("skills").join(id);
+        if skill_metadata::is_valid_skill_dir(&in_agents) {
+            return Ok(in_agents);
+        }
+
         // Recursive search: match by directory name or SKILL.md name field.
         // The basename branch must check validity; the SKILL.md-name branch is
         // implicitly validated by parsing the frontmatter.
@@ -1040,6 +1051,24 @@ mod tests {
         fs::write(skill.join("SKILL.md"), "content").unwrap();
         let found = find_skill_dir(tmp.path(), Some("my-skill")).unwrap();
         assert_eq!(found, skill);
+    }
+
+    #[test]
+    fn find_skill_dir_prefers_agents_skills_over_provider_variants() {
+        // When a repo publishes both the unified `.agents/skills/<id>` variant
+        // and provider-specific variants (e.g. `.cursor/skills/<id>`), we must
+        // pick the unified one — the recursive fallback is non-deterministic
+        // across filesystems.
+        let tmp = tempdir().unwrap();
+        let agents = tmp.path().join(".agents").join("skills").join("my-skill");
+        let cursor = tmp.path().join(".cursor").join("skills").join("my-skill");
+        let claude = tmp.path().join(".claude").join("skills").join("my-skill");
+        for dir in [&agents, &cursor, &claude] {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(dir.join("SKILL.md"), "content").unwrap();
+        }
+        let found = find_skill_dir(tmp.path(), Some("my-skill")).unwrap();
+        assert_eq!(found, agents);
     }
 
     #[test]

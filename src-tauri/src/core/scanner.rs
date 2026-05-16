@@ -166,33 +166,42 @@ pub fn scan_local_skills_with_adapters(
     let mut tools_scanned = 0;
 
     for adapter in adapters {
-        if !adapter.is_installed() {
+        let installed = adapter.is_installed();
+        let additional_dirs = adapter.additional_existing_scan_dirs();
+
+        // Discover via additional_scan_dirs even when the legacy detect dir is
+        // missing — handles tools that migrated to a shared skills location
+        // (e.g. codex/copilot → ~/.agents/skills) on machines without the
+        // legacy vendor dir.
+        if !installed && additional_dirs.is_empty() {
             continue;
         }
 
         tools_scanned += 1;
 
-        let primary_scan_dir = adapter.skills_dir();
-        if primary_scan_dir.exists() {
-            if adapter.recursive_scan {
-                scan_recursive_dir(
-                    &adapter.key,
-                    &primary_scan_dir,
-                    managed_paths,
-                    &mut discovered,
-                );
-            } else {
-                scan_flat_dir(
-                    &adapter.key,
-                    &primary_scan_dir,
-                    managed_paths,
-                    &mut discovered,
-                );
+        if installed {
+            let primary_scan_dir = adapter.skills_dir();
+            if primary_scan_dir.exists() {
+                if adapter.recursive_scan {
+                    scan_recursive_dir(
+                        &adapter.key,
+                        &primary_scan_dir,
+                        managed_paths,
+                        &mut discovered,
+                    );
+                } else {
+                    scan_flat_dir(
+                        &adapter.key,
+                        &primary_scan_dir,
+                        managed_paths,
+                        &mut discovered,
+                    );
+                }
             }
         }
 
         // Additional scan dirs are already resolved to concrete skills roots.
-        for scan_dir in adapter.additional_existing_scan_dirs() {
+        for scan_dir in additional_dirs {
             scan_flat_dir(&adapter.key, &scan_dir, managed_paths, &mut discovered);
         }
     }

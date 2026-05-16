@@ -152,15 +152,27 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            // Codex reads user-level skills only from `~/.agents/skills` per the
+            // official docs (developers.openai.com/codex/skills). Deploy there;
+            // keep `.codex/skills` as a discovery fallback for users whose
+            // earlier syncs landed in the old (incorrect) deployment target.
+            //
+            // Project-level path is pinned to `.codex/skills` to preserve the
+            // existing per-project UI grouping. Codex CLI's repo-scope reads
+            // <repo>/.agents/skills (which is already covered by other adapters
+            // sharing that path like cline/warp), so this pin doesn't lose
+            // functionality — it just keeps Codex from displacing those
+            // adapters as the representative for the shared `.agents/skills`
+            // project group.
             key: "codex".into(),
             display_name: "Codex".into(),
-            relative_skills_dir: ".codex/skills".into(),
+            relative_skills_dir: ".agents/skills".into(),
             relative_detect_dir: ".codex".into(),
-            additional_scan_dirs: vec![],
+            additional_scan_dirs: vec![".codex/skills".into()],
             override_skills_dir: None,
             is_custom: false,
             recursive_scan: false,
-            project_relative_skills_dir: None,
+            project_relative_skills_dir: Some(".codex/skills".into()),
         },
         ToolAdapter {
             key: "opencode".into(),
@@ -244,7 +256,8 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             display_name: "GitHub Copilot".into(),
             relative_skills_dir: ".copilot/skills".into(),
             relative_detect_dir: ".copilot".into(),
-            additional_scan_dirs: vec![],
+            // GitHub Copilot now reads skills from the unified `~/.agents/skills` location too.
+            additional_scan_dirs: vec![".agents/skills".into()],
             override_skills_dir: None,
             is_custom: false,
             recursive_scan: false,

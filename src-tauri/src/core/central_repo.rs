@@ -253,30 +253,36 @@ pub fn set_base_dir_override(path: Option<String>) -> Result<PathBuf> {
     let current = base_dir();
     let mut config = load_config();
 
-    match path {
-        Some(raw) => {
-            let next = normalize_path(&raw)?;
-            config.repo_path = Some(next.to_string_lossy().to_string());
-            config.pending_migration_from = if next != current {
-                Some(current.to_string_lossy().to_string())
-            } else {
-                None
-            };
-            save_config(&config)?;
-            Ok(next)
-        }
-        None => {
-            let next = default_base_dir();
-            config.repo_path = None;
-            config.pending_migration_from = if next != current {
-                Some(current.to_string_lossy().to_string())
-            } else {
-                None
-            };
-            save_config(&config)?;
-            Ok(next)
-        }
-    }
+    // The actual on-disk data location can differ from `current` when the user
+    // already changed the path once but hasn't restarted yet — `current` then
+    // reflects the unsatisfied future target stored in `repo_path`, while the
+    // data still sits at `pending_migration_from`. Track the true location so
+    // multiple changes before restart still migrate from the right source.
+    let data_location = match &config.pending_migration_from {
+        Some(src) => match normalize_path(src) {
+            Ok(path) if path.is_dir() => path,
+            _ => current.clone(),
+        },
+        None => current.clone(),
+    };
+
+    let (next, persist_repo_path) = match path {
+        Some(raw) => (normalize_path(&raw)?, true),
+        None => (default_base_dir(), false),
+    };
+
+    config.repo_path = if persist_repo_path {
+        Some(next.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    config.pending_migration_from = if next != data_location {
+        Some(data_location.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    save_config(&config)?;
+    Ok(next)
 }
 
 fn directory_has_entries(path: &Path) -> Result<bool> {

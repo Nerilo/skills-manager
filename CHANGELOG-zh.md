@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.19.2] - 2026-05-16
+
+### 修复
+- **Codex 技能改用官方路径 `~/.agents/skills`** —— Codex 按官方文档只从 `~/.agents/skills` 读取用户级技能，但 skills-manager 之前部署到 `~/.codex/skills`（codex 根本不读）且不扫 `~/.agents/skills`。现在部署和发现都改对，老的 `~/.codex/skills` 位置仍能扫到（兼容已存在的同步内容）（#143、#147）。
+- **GitHub Copilot 也扫描 `~/.agents/skills`** —— 在原有的 `~/.copilot/skills` 之外（#147）。
+- **本地安装失败显示真实错误信息** —— toast 不再出现 `[object Object]`，会显示实际错误内容（#101）。
+- **改了 SKILL.md 后中央列表的描述会自动刷新** —— 外部编辑 `SKILL.md` 不再需要重新导入才能看到新 description（#92）。
+- **安装/导入成功后不再误弹「失败」toast** —— 之前 install 之后的刷新（后台扫描、状态刷新）出错会被当成 install 失败；现在 install 与 refresh 分两阶段，refresh 失败仅记录日志，不污染 UI（#92）。
+- **重启前连续改两次中央仓库目录不再丢数据** —— 跨多次未重启的路径切换都能正确追溯原始数据位置（#92）。
+- **多变体技能安装会优先选通用版本** —— 当仓库提供多个 agent-specific 变体（`.cursor/skills/<id>`、`.claude/skills/<id>` 等）时，安装器现在稳定选择 `.agents/skills/<id>`，不会再随机命中（#103）。
+
 ## [1.19.1] - 2026-05-15
 
 ### 修复

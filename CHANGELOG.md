@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.2] - 2026-05-16
+
+### Fixed
+- **Codex skills now use the official `~/.agents/skills` location** — Codex reads user-level skills only from `~/.agents/skills` per its official docs, but skills-manager was deploying to `~/.codex/skills` (which Codex never reads) and not scanning `~/.agents/skills`. Both deployment target and discovery are now corrected; skills already at the old `~/.codex/skills` remain visible for backward compatibility (#143, #147).
+- **GitHub Copilot also scans `~/.agents/skills`** — in addition to the existing `~/.copilot/skills` (#147).
+- **Real error message on local install failure** — `[object Object]` no longer shows in the toast when an install fails; the actual error is displayed (#101).
+- **Description in the central list refreshes when SKILL.md changes** — editing `SKILL.md` externally now updates the displayed description without re-import (#92).
+- **No more false "install failed" toast when install actually succeeded** — post-install refresh failures (background scan / state refresh) are now silently logged instead of being surfaced as install errors (#92).
+- **Changing the central repository path twice before restart no longer loses data** — the migration source is now tracked even across multiple path changes within one session (#92).
+- **Multi-variant skill installs prefer the generic version** — when a repo ships several agent-specific variants (`.cursor/skills/<id>`, `.claude/skills/<id>`, …), the installer now consistently picks `.agents/skills/<id>` instead of an arbitrary one (#103).
+
 ## [1.19.1] - 2026-05-15
 
 ### Fixed
