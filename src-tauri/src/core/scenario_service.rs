@@ -146,9 +146,9 @@ fn tool_globally_enabled(store: &SkillStore, tool: &str) -> bool {
 fn sync_wsl_library_replicas_for_targets(
     store: &SkillStore,
     desired_targets: &[ScenarioSyncTarget],
-) -> HashSet<String> {
+) -> HashMap<String, String> {
     let mut synced = HashSet::new();
-    let mut failed = HashSet::new();
+    let mut failed = HashMap::new();
     for target in desired_targets {
         let Some((distro_name, _agent_key)) = wsl_runtime::parse_wsl_tool_key(&target.tool) else {
             continue;
@@ -156,7 +156,7 @@ fn sync_wsl_library_replicas_for_targets(
         if synced.insert(distro_name.to_string()) {
             if let Err(err) = sync_wsl_library_replica_for_tool(store, &target.tool) {
                 log::warn!("Failed to sync WSL Library Replica for {distro_name}: {err}");
-                failed.insert(distro_name.to_string());
+                failed.insert(distro_name.to_string(), err.to_string());
             }
         }
     }
@@ -178,7 +178,7 @@ pub fn sync_desired_targets(
 
     for desired in desired_targets {
         if let Some((distro_name, _agent_key)) = wsl_runtime::parse_wsl_tool_key(&desired.tool) {
-            if failed_wsl_replicas.contains(distro_name) {
+            if failed_wsl_replicas.contains_key(distro_name) {
                 log::warn!(
                     "Skipping WSL target {} because its Library Replica failed to sync",
                     desired.target.display()
@@ -240,6 +240,18 @@ pub fn sync_desired_targets(
                 );
             }
         }
+    }
+
+    if !failed_wsl_replicas.is_empty() {
+        let mut failures: Vec<String> = failed_wsl_replicas
+            .into_iter()
+            .map(|(distro, err)| format!("{distro}: {err}"))
+            .collect();
+        failures.sort();
+        return Err(AppError::io(format!(
+            "Failed to sync WSL Library Replica: {}",
+            failures.join("; ")
+        )));
     }
 
     Ok(())
@@ -637,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn scenario_sync_continues_non_wsl_targets_when_wsl_replica_fails() {
+    fn scenario_sync_reports_error_after_continuing_non_wsl_targets_when_wsl_replica_fails() {
         let _guard = central_repo::test_base_dir_lock();
         let tmp = tempdir().unwrap();
         central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
@@ -693,13 +705,18 @@ mod tests {
             .unwrap();
         store.set_setting("sync_mode", "copy").unwrap();
 
-        sync_scenario_skills(&store, "default").unwrap();
+        let err = sync_scenario_skills(&store, "default").unwrap_err();
 
         assert_eq!(
             fs::read_to_string(custom_target_root.join("demo-skill").join("SKILL.md")).unwrap(),
             "# primary"
         );
         assert!(!wsl_target_root.join("demo-skill").exists());
+        assert!(
+            err.to_string()
+                .contains("Failed to sync WSL Library Replica"),
+            "{err}"
+        );
         central_repo::set_test_base_dir_override(None);
     }
 

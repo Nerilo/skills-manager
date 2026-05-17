@@ -941,63 +941,73 @@ pub async fn export_skill_to_project(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let project = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let skill = store
-            .get_skill_by_id(&skill_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Skill not found"))?;
-
-        let dir_name = slugify_skill_dir_name(&skill.name);
-        ensure_safe_skill_relative_path(&dir_name)?;
-
-        let agent_keys = agents.filter(|items| !items.is_empty()).unwrap_or_else(|| {
-            if project.workspace_type == "linked" {
-                vec![linked_workspace_agent_key(&project)]
-            } else {
-                vec!["claude_code".to_string()]
-            }
-        });
-
-        for agent_key in &agent_keys {
-            let (skills_root, disabled_root) =
-                resolve_agent_skills_roots(&store, &project, agent_key)
-                    .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-            let target_dir = skills_root.join(&dir_name);
-
-            if target_dir.strip_prefix(&skills_root).is_err() {
-                return Err(AppError::invalid_input("Invalid skill directory path"));
-            }
-
-            if target_dir.exists()
-                || disabled_root
-                    .as_ref()
-                    .map(|path| path.join(&dir_name).exists())
-                    .unwrap_or(false)
-            {
-                return Err(AppError::invalid_input(format!(
-                    "Skill \"{}\" already exists in this workspace for agent {}",
-                    skill.name, agent_key
-                )));
-            }
-        }
-
-        for agent_key in &agent_keys {
-            let (skills_root, _) = resolve_agent_skills_roots(&store, &project, agent_key)
-                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-            let source = skill_distribution::source_for_target(&store, &skill, agent_key)?;
-            let target_dir = skills_root.join(&dir_name);
-            std::fs::create_dir_all(&skills_root)?;
-            sync_engine::sync_skill(&source, &target_dir, sync_engine::SyncMode::Copy)
-                .map_err(AppError::io)?;
-        }
-
-        Ok(())
+        export_skill_to_project_internal(&store, &skill_id, &project_id, agents)
     })
     .await?
+}
+
+fn export_skill_to_project_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    project_id: &str,
+    agents: Option<Vec<String>>,
+) -> Result<(), AppError> {
+    let project = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let skill = store
+        .get_skill_by_id(skill_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Skill not found"))?;
+
+    let dir_name = slugify_skill_dir_name(&skill.name);
+    ensure_safe_skill_relative_path(&dir_name)?;
+
+    let agent_keys = agents.filter(|items| !items.is_empty()).unwrap_or_else(|| {
+        if project.workspace_type == "linked" {
+            vec![linked_workspace_agent_key(&project)]
+        } else {
+            vec!["claude_code".to_string()]
+        }
+    });
+
+    for agent_key in &agent_keys {
+        let (skills_root, disabled_root) =
+            resolve_agent_skills_roots(store, &project, agent_key)
+                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
+        let target_dir = skills_root.join(&dir_name);
+
+        if target_dir.strip_prefix(&skills_root).is_err() {
+            return Err(AppError::invalid_input("Invalid skill directory path"));
+        }
+
+        if target_dir.exists()
+            || disabled_root
+                .as_ref()
+                .map(|path| path.join(&dir_name).exists())
+                .unwrap_or(false)
+        {
+            return Err(AppError::invalid_input(format!(
+                "Skill \"{}\" already exists in this workspace for agent {}",
+                skill.name, agent_key
+            )));
+        }
+    }
+
+    for agent_key in &agent_keys {
+        let (skills_root, _) = resolve_agent_skills_roots(store, &project, agent_key)
+            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
+        skill_distribution::refresh_wsl_library_replica_for_target(store, agent_key)?;
+        let source = skill_distribution::source_for_target(store, &skill, agent_key)?;
+        let target_dir = skills_root.join(&dir_name);
+        std::fs::create_dir_all(&skills_root)?;
+        sync_engine::sync_skill(&source, &target_dir, sync_engine::SyncMode::Copy)
+            .map_err(AppError::io)?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1009,46 +1019,61 @@ pub async fn update_project_skill_from_center(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let configs = agent_skill_configs(&store);
-        let skills = read_workspace_skills(&record, &configs);
-        let skill = skills
-            .iter()
-            .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
-            .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
-
-        let all_managed = store.get_all_skills().unwrap_or_default();
-        let managed = find_best_center_match(skill, &all_managed)
-            .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
-
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
-        let target_path = PathBuf::from(&skill.path);
-        if target_path.starts_with(&skills_root) {
-            ensure_dir_within_root(&target_path, &skills_root)?;
-        } else if disabled_root
-            .as_ref()
-            .map(|root| target_path.starts_with(root))
-            .unwrap_or(false)
-        {
-            let disabled_root = disabled_root.expect("checked above");
-            ensure_dir_within_root(&target_path, &disabled_root)?;
-        } else {
-            return Err(AppError::invalid_input("Invalid skill directory path"));
-        }
-
-        let source = skill_distribution::source_for_target(&store, managed, &agent)?;
-        sync_engine::sync_skill(&source, &target_path, sync_engine::SyncMode::Copy)
-            .map_err(AppError::io)?;
-        Ok(())
+        update_project_skill_from_center_internal(&store, &project_id, &skill_relative_path, &agent)
     })
     .await?
+}
+
+fn update_project_skill_from_center_internal(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+    agent: &str,
+) -> Result<(), AppError> {
+    ensure_safe_skill_relative_path(skill_relative_path)?;
+
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+
+    let configs = agent_skill_configs(store);
+    let skills = read_workspace_skills(&record, &configs);
+    let base_agent = crate::core::wsl_runtime::parse_wsl_tool_key(agent)
+        .map(|(_, agent_key)| agent_key.to_string());
+    let skill = skills
+        .iter()
+        .find(|s| {
+            s.relative_path == skill_relative_path
+                && (s.agent == agent || base_agent.as_deref() == Some(s.agent.as_str()))
+        })
+        .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
+
+    let all_managed = store.get_all_skills().unwrap_or_default();
+    let managed = find_best_center_match(skill, &all_managed)
+        .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
+
+    let (skills_root, disabled_root) = resolve_agent_skills_roots(store, &record, agent)
+        .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+    let target_path = PathBuf::from(&skill.path);
+    if target_path.starts_with(&skills_root) {
+        ensure_dir_within_root(&target_path, &skills_root)?;
+    } else if disabled_root
+        .as_ref()
+        .map(|root| target_path.starts_with(root))
+        .unwrap_or(false)
+    {
+        let disabled_root = disabled_root.expect("checked above");
+        ensure_dir_within_root(&target_path, &disabled_root)?;
+    } else {
+        return Err(AppError::invalid_input("Invalid skill directory path"));
+    }
+
+    skill_distribution::refresh_wsl_library_replica_for_target(store, agent)?;
+    let source = skill_distribution::source_for_target(store, managed, agent)?;
+    sync_engine::sync_skill(&source, &target_path, sync_engine::SyncMode::Copy)
+        .map_err(AppError::io)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1124,12 +1149,13 @@ pub async fn delete_project_skill(
 mod tests {
     use super::{
         classify_sync_status, ensure_distinct_linked_workspace_roots,
-        remove_workspace_skill_target, set_project_skill_enabled_state,
+        export_skill_to_project_internal, remove_workspace_skill_target,
+        set_project_skill_enabled_state, update_project_skill_from_center_internal,
     };
-    use crate::core::content_hash;
     use crate::core::error::ErrorKind;
     use crate::core::project_scanner::ProjectSkillInfo;
-    use crate::core::skill_store::SkillRecord;
+    use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
+    use crate::core::{central_repo, content_hash};
     use std::fs;
     use tempfile::tempdir;
 
@@ -1183,6 +1209,165 @@ mod tests {
             last_modified_at,
             content_hash,
         }
+    }
+
+    fn sample_project(path: String) -> ProjectRecord {
+        ProjectRecord {
+            id: "project-1".to_string(),
+            name: "Project".to_string(),
+            path,
+            workspace_type: "standard".to_string(),
+            linked_agent_key: None,
+            linked_agent_name: None,
+            disabled_path: None,
+            sort_order: 0,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn sample_center_skill(central_path: &std::path::Path) -> SkillRecord {
+        SkillRecord {
+            id: "skill-1".to_string(),
+            name: "demo-skill".to_string(),
+            description: None,
+            source_type: "local".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: content_hash::hash_directory(central_path).ok(),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: Some(1),
+            last_check_error: None,
+        }
+    }
+
+    fn configure_wsl_runtime(store: &SkillStore, replica_root: &std::path::Path) {
+        let agent_root = replica_root.join("agent-target");
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "codex",
+                        "enabled": true,
+                        "skills_dir": agent_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn export_skill_to_wsl_project_refreshes_library_replica_before_copying() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
+        let store = SkillStore::new(&tmp.path().join("project-export-wsl.db")).unwrap();
+        let central_skill = central_repo::skills_dir().join("demo-skill");
+        let replica_root = tmp.path().join("replica");
+        let project_root = tmp.path().join("project");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::create_dir_all(replica_root.join("demo-skill")).unwrap();
+        fs::create_dir_all(&project_root).unwrap();
+        fs::write(central_skill.join("SKILL.md"), "# fresh").unwrap();
+        fs::write(replica_root.join("demo-skill").join("SKILL.md"), "# stale").unwrap();
+        store
+            .insert_skill(&sample_center_skill(&central_skill))
+            .unwrap();
+        store
+            .insert_project(&sample_project(project_root.to_string_lossy().to_string()))
+            .unwrap();
+        configure_wsl_runtime(&store, &replica_root);
+
+        export_skill_to_project_internal(
+            &store,
+            "skill-1",
+            "project-1",
+            Some(vec!["wsl:Ubuntu:codex".to_string()]),
+        )
+        .unwrap();
+
+        let exported = project_root
+            .join(".codex")
+            .join("skills")
+            .join("demo-skill")
+            .join("SKILL.md");
+        assert_eq!(fs::read_to_string(exported).unwrap(), "# fresh");
+        assert_eq!(
+            fs::read_to_string(replica_root.join("demo-skill").join("SKILL.md")).unwrap(),
+            "# fresh"
+        );
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn update_wsl_project_skill_from_center_refreshes_library_replica_before_copying() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
+        let store = SkillStore::new(&tmp.path().join("project-update-wsl.db")).unwrap();
+        let central_skill = central_repo::skills_dir().join("demo-skill");
+        let replica_root = tmp.path().join("replica");
+        let project_root = tmp.path().join("project");
+        let project_skill = project_root
+            .join(".codex")
+            .join("skills")
+            .join("demo-skill");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::create_dir_all(replica_root.join("demo-skill")).unwrap();
+        fs::create_dir_all(&project_skill).unwrap();
+        fs::write(
+            central_skill.join("SKILL.md"),
+            "---\nname: demo-skill\n---\n# fresh",
+        )
+        .unwrap();
+        fs::write(
+            replica_root.join("demo-skill").join("SKILL.md"),
+            "---\nname: demo-skill\n---\n# stale replica",
+        )
+        .unwrap();
+        fs::write(
+            project_skill.join("SKILL.md"),
+            "---\nname: demo-skill\n---\n# stale project",
+        )
+        .unwrap();
+        store
+            .insert_skill(&sample_center_skill(&central_skill))
+            .unwrap();
+        store
+            .insert_project(&sample_project(project_root.to_string_lossy().to_string()))
+            .unwrap();
+        configure_wsl_runtime(&store, &replica_root);
+
+        update_project_skill_from_center_internal(
+            &store,
+            "project-1",
+            "demo-skill",
+            "wsl:Ubuntu:codex",
+        )
+        .unwrap();
+
+        assert!(fs::read_to_string(project_skill.join("SKILL.md"))
+            .unwrap()
+            .contains("# fresh"));
+        assert!(
+            fs::read_to_string(replica_root.join("demo-skill").join("SKILL.md"))
+                .unwrap()
+                .contains("# fresh")
+        );
+        central_repo::set_test_base_dir_override(None);
     }
 
     #[test]

@@ -1725,6 +1725,7 @@ fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppErro
             continue;
         }
 
+        skill_distribution::refresh_wsl_library_replica_for_target(store, &target.tool)?;
         let source = skill_distribution::source_for_target(store, &skill, &target.tool)?;
         sync_engine::sync_skill(
             &source,
@@ -1952,6 +1953,62 @@ mod tests {
             last_checked_at: None,
             last_check_error: None,
         }
+    }
+
+    #[test]
+    fn resync_copy_targets_refreshes_wsl_library_replica_before_copying() {
+        let repo = test_repo();
+        let central_skill = write_skill_dir("demo-skill");
+        fs::write(central_skill.join("SKILL.md"), "# fresh").unwrap();
+        let replica_root = central_repo::base_dir().join("replica");
+        let replica_skill = replica_root.join("demo-skill");
+        let target_root = central_repo::base_dir().join("wsl-target");
+        let target_skill = target_root.join("demo-skill");
+        fs::create_dir_all(&replica_skill).unwrap();
+        fs::create_dir_all(&target_skill).unwrap();
+        fs::write(replica_skill.join("SKILL.md"), "# stale replica").unwrap();
+        fs::write(target_skill.join("SKILL.md"), "# stale target").unwrap();
+        repo.store
+            .insert_skill(&sample_skill("skill-1", "demo-skill", &central_skill))
+            .unwrap();
+        repo.store
+            .insert_target(&SkillTargetRecord {
+                id: "target-1".to_string(),
+                skill_id: "skill-1".to_string(),
+                tool: "wsl:Ubuntu:codex".to_string(),
+                target_path: target_skill.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+            })
+            .unwrap();
+        repo.store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "codex",
+                        "enabled": true,
+                        "skills_dir": target_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+
+        resync_copy_targets(&repo.store, "skill-1").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(replica_skill.join("SKILL.md")).unwrap(),
+            "# fresh"
+        );
+        assert_eq!(
+            fs::read_to_string(target_skill.join("SKILL.md")).unwrap(),
+            "# fresh"
+        );
     }
 
     #[test]
