@@ -277,6 +277,11 @@ fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
                 "Library Replica target must include a dedicated replica directory, not a home, mount, or root"
             );
         }
+        if linux_path.split('/').filter(|part| !part.is_empty()).last() != Some(".skills-manager") {
+            anyhow::bail!(
+                "Library Replica target must end with a dedicated .skills-manager directory"
+            );
+        }
     }
     Ok(())
 }
@@ -800,6 +805,19 @@ mod tests {
             err.to_string().contains("dedicated replica directory"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn sync_library_replica_rejects_non_app_owned_wsl_target() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\projects");
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(primary.join("SKILL.md"), "# primary").unwrap();
+
+        let err = sync_library_replica(&primary, replica).unwrap_err();
+
+        assert!(err.to_string().contains(".skills-manager"), "{err}");
     }
 
     // ── remove_target ──

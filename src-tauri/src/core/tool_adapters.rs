@@ -940,7 +940,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\skills","agent_targets":[{"key":"codex","enabled":true}] }]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.skills-manager","agent_targets":[{"key":"codex","enabled":true}] }]"#,
             )
             .unwrap();
 
@@ -971,7 +971,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\skills","agent_targets":[{"key":"codex","enabled":false}]}]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.skills-manager","agent_targets":[{"key":"codex","enabled":false}]}]"#,
             )
             .unwrap();
 
@@ -991,7 +991,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\mnt\\d\\skills"}]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\mnt\\d\\.skills-manager"}]"#,
             )
             .unwrap();
 
@@ -1024,7 +1024,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\skills","agent_targets":[{"key":"custom_agent","enabled":true}]}]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.skills-manager","agent_targets":[{"key":"custom_agent","enabled":true}]}]"#,
             )
             .unwrap();
 
@@ -1040,7 +1040,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.codex\\skills"}]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.skills-manager"}]"#,
             )
             .unwrap();
 
@@ -1062,7 +1062,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.codex\\skills"}]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.skills-manager"}]"#,
             )
             .unwrap();
 
@@ -1078,7 +1078,7 @@ mod tests {
         store
             .set_setting(
                 "wsl_runtime_environments",
-                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.codex\\skills","agent_targets":[{"key":"codex","enabled":true,"skills_dir":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.agents\\skills"}]}]"#,
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.skills-manager","agent_targets":[{"key":"codex","enabled":true,"skills_dir":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.agents\\skills"}]}]"#,
             )
             .unwrap();
 

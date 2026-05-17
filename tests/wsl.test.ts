@@ -13,13 +13,13 @@ describe("WSL location display model", () => {
     const windowsLocation = locationFromWindowsPath("C:\\Users\\me\\.codex\\skills");
     const wslLocation = locationFromWslRuntime({
       distro_name: "Ubuntu-24.04",
-      library_replica_path: "/home/me/.codex/skills",
+      library_replica_path: "/home/me/.skills-manager",
       reachable: true,
       agent_targets: [],
     });
 
     assert.equal(formatLocationLabel(windowsLocation), "Windows · C:\\Users\\me\\.codex\\skills");
-    assert.equal(formatLocationLabel(wslLocation), "WSL · Ubuntu-24.04:/home/me/.codex/skills");
+    assert.equal(formatLocationLabel(wslLocation), "WSL · Ubuntu-24.04:/home/me/.skills-manager");
   });
 
   it("uses shared validation keys for WSL runtime input", () => {
@@ -32,7 +32,7 @@ describe("WSL location display model", () => {
   it("builds WSL-backed agent targets from the shared runtime and replica model", () => {
     const runtime = {
       distro_name: "Ubuntu-24.04",
-      library_replica_path: "/home/me/.codex/skills",
+      library_replica_path: "/home/me/.skills-manager",
       reachable: false,
       agent_targets: [],
     };
@@ -44,7 +44,7 @@ describe("WSL location display model", () => {
       libraryReplica: {
         kind: "wsl",
         distroName: "Ubuntu-24.04",
-        path: "/home/me/.codex/skills",
+        path: "/home/me/.skills-manager",
         reachable: false,
       },
     });

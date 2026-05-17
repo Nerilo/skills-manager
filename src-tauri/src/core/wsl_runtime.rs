@@ -73,25 +73,24 @@ pub fn add_runtime_environment(
     let distro_name = normalize_distro_name(distro_name)?;
     let library_replica_path = normalize_library_replica_path(&distro_name, library_replica_path)?;
     let mut environments = load_environments(store)?;
-    if let Some(existing) = environments
+    let saved_environment = if let Some(existing) = environments
         .iter_mut()
         .find(|env| env.distro_name.eq_ignore_ascii_case(&distro_name))
     {
         existing.distro_name = distro_name.clone();
         existing.library_replica_path = library_replica_path.clone();
+        existing.clone()
     } else {
-        environments.push(WslRuntimeEnvironment {
+        let environment = WslRuntimeEnvironment {
             distro_name: distro_name.clone(),
             library_replica_path: library_replica_path.clone(),
             agent_targets: vec![],
-        });
-    }
+        };
+        environments.push(environment.clone());
+        environment
+    };
     save_environments(store, &environments)?;
-    Ok(to_status(WslRuntimeEnvironment {
-        distro_name,
-        library_replica_path,
-        agent_targets: vec![],
-    }))
+    Ok(to_status(saved_environment))
 }
 
 pub fn list_runtime_environments(store: &SkillStore) -> Result<Vec<WslRuntimeEnvironmentStatus>> {
@@ -290,9 +289,16 @@ fn normalize_unc_path(distro_name: &str, raw: &str) -> Result<String> {
 }
 
 fn ensure_dedicated_replica_path(replica: &str) -> Result<()> {
-    let depth = replica.split('\\').filter(|part| !part.is_empty()).count();
+    let parts: Vec<&str> = replica
+        .split('\\')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let depth = parts.len();
     if depth < 3 {
         bail!("Library Replica path must include a dedicated replica directory, not a home, mount, or distro root");
+    }
+    if parts.last().copied() != Some(".skills-manager") {
+        bail!("Library Replica path must end with a dedicated .skills-manager directory");
     }
     Ok(())
 }
@@ -376,22 +382,25 @@ mod tests {
     fn normalizes_unc_library_replica_path_for_display() {
         let normalized = normalize_library_replica_path(
             "Ubuntu-24.04",
-            r"\\wsl.localhost\Ubuntu-24.04\home\me\.codex\skills",
+            r"\\wsl.localhost\Ubuntu-24.04\home\me\.skills-manager",
         )
         .unwrap();
 
         assert_eq!(
             normalized,
-            r"\\wsl.localhost\Ubuntu-24.04\home\me\.codex\skills"
+            r"\\wsl.localhost\Ubuntu-24.04\home\me\.skills-manager"
         );
     }
 
     #[test]
     fn normalizes_distro_prefixed_linux_path_to_unc_display_path() {
         let normalized =
-            normalize_library_replica_path("Ubuntu", "Ubuntu:/home/me/.codex/skills").unwrap();
+            normalize_library_replica_path("Ubuntu", "Ubuntu:/home/me/.skills-manager").unwrap();
 
-        assert_eq!(normalized, r"\\wsl.localhost\Ubuntu\home\me\.codex\skills");
+        assert_eq!(
+            normalized,
+            r"\\wsl.localhost\Ubuntu\home\me\.skills-manager"
+        );
     }
 
     #[test]
@@ -420,18 +429,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_app_owned_library_replica_path() {
+        let err = normalize_library_replica_path("Ubuntu", "Ubuntu:/home/me/projects").unwrap_err();
+
+        assert!(err.to_string().contains(".skills-manager"), "{err}");
+    }
+
+    #[test]
     fn persists_runtime_environment_with_normalized_path() {
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("wsl.db")).unwrap();
 
-        let saved = add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/.codex/skills")
+        let saved = add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/.skills-manager")
             .expect("runtime should save");
         let listed = list_runtime_environments(&store).expect("runtime should list");
 
         assert_eq!(saved.distro_name, "Ubuntu");
         assert_eq!(
             saved.library_replica_path,
-            r"\\wsl.localhost\Ubuntu\home\me\.codex\skills"
+            r"\\wsl.localhost\Ubuntu\home\me\.skills-manager"
         );
         assert!(saved.agent_targets.is_empty());
         assert_eq!(listed, vec![saved]);
@@ -441,7 +457,7 @@ mod tests {
     fn persists_runtime_agent_target_overrides_without_windows_settings() {
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("wsl-targets.db")).unwrap();
-        add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/skills").unwrap();
+        add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/.skills-manager").unwrap();
         store
             .set_setting("disabled_tools", r#"["codex"]"#)
             .expect("Windows disabled tools should save");
@@ -466,6 +482,21 @@ mod tests {
     }
 
     #[test]
+    fn updating_runtime_environment_returns_existing_agent_targets() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-update-targets.db")).unwrap();
+        add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/.skills-manager").unwrap();
+        set_agent_target_enabled(&store, "Ubuntu", "codex", false).unwrap();
+
+        let updated =
+            add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/.skills-manager").unwrap();
+
+        assert_eq!(updated.agent_targets.len(), 1);
+        assert_eq!(updated.agent_targets[0].key, "codex");
+        assert!(!updated.agent_targets[0].enabled);
+    }
+
+    #[test]
     fn resolves_default_agent_target_under_home_when_replica_is_under_home() {
         let runtime = WslRuntimeEnvironment {
             distro_name: "Ubuntu".to_string(),
@@ -482,7 +513,7 @@ mod tests {
     fn resolves_default_agent_target_next_to_replica_when_replica_is_outside_home() {
         let runtime = WslRuntimeEnvironment {
             distro_name: "Ubuntu".to_string(),
-            library_replica_path: r"\\wsl.localhost\Ubuntu\mnt\d\skills".to_string(),
+            library_replica_path: r"\\wsl.localhost\Ubuntu\mnt\d\.skills-manager".to_string(),
             agent_targets: vec![],
         };
 
@@ -495,7 +526,7 @@ mod tests {
     fn rejects_empty_default_agent_target_relative_path() {
         let runtime = WslRuntimeEnvironment {
             distro_name: "Ubuntu".to_string(),
-            library_replica_path: r"\\wsl.localhost\Ubuntu\home\me\skills".to_string(),
+            library_replica_path: r"\\wsl.localhost\Ubuntu\home\me\.skills-manager".to_string(),
             agent_targets: vec![],
         };
 
@@ -508,7 +539,7 @@ mod tests {
     fn unconfigured_wsl_agent_targets_are_disabled_by_default() {
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("wsl-disabled-default.db")).unwrap();
-        add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/skills").unwrap();
+        add_runtime_environment(&store, "Ubuntu", "Ubuntu:/home/me/.skills-manager").unwrap();
 
         assert!(!agent_target_enabled(&store, "Ubuntu", "codex"));
     }
