@@ -60,8 +60,14 @@ struct SkillsArgs {
 #[derive(Subcommand, Debug)]
 enum SkillsCommand {
     List,
-    Show { reference: String },
-    Export { reference: String, #[arg(long)] dest: PathBuf },
+    Show {
+        reference: String,
+    },
+    Export {
+        reference: String,
+        #[arg(long)]
+        dest: PathBuf,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -88,13 +94,25 @@ struct GitArgs {
 enum GitCommand {
     Status,
     Init,
-    Clone { url: String },
-    SetRemote { url: String },
+    Clone {
+        url: String,
+    },
+    SetRemote {
+        url: String,
+    },
     Pull,
     Push,
-    Commit { #[arg(short, long)] message: String },
-    Versions { #[arg(long)] limit: Option<usize> },
-    Restore { tag: String },
+    Commit {
+        #[arg(short, long)]
+        message: String,
+    },
+    Versions {
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    Restore {
+        tag: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -222,10 +240,15 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         },
         Commands::Skills(args) => match args.command {
             SkillsCommand::List => print_json(&list_skills(&store)?, cli.json),
-            SkillsCommand::Show { reference } => print_json(&show_skill(&store, &reference)?, cli.json),
+            SkillsCommand::Show { reference } => {
+                print_json(&show_skill(&store, &reference)?, cli.json)
+            }
             SkillsCommand::Export { reference, dest } => {
                 let result = export_skill(&store, &reference, &dest)?;
-                print_json(&serde_json::json!({"ok": true, "destination": result}), cli.json)
+                print_json(
+                    &serde_json::json!({"ok": true, "destination": result}),
+                    cli.json,
+                )
             }
         },
         Commands::Scenarios(args) => match args.command {
@@ -245,10 +268,16 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             }
         },
         Commands::Git(args) => match args.command {
-            GitCommand::Status => print_json(&git_backup::get_status(&central_repo::skills_dir())?, cli.json),
+            GitCommand::Status => print_json(
+                &git_backup::get_status(&central_repo::skills_dir())?,
+                cli.json,
+            ),
             GitCommand::Init => {
                 git_backup::init_repo(&central_repo::skills_dir())?;
-                print_json(&git_backup::get_status(&central_repo::skills_dir())?, cli.json)
+                print_json(
+                    &git_backup::get_status(&central_repo::skills_dir())?,
+                    cli.json,
+                )
             }
             GitCommand::Clone { url } => {
                 let target = central_repo::skills_dir();
@@ -267,27 +296,40 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             }
             GitCommand::SetRemote { url } => {
                 git_backup::set_remote(&central_repo::skills_dir(), &url)?;
-                print_json(&git_backup::get_status(&central_repo::skills_dir())?, cli.json)
+                print_json(
+                    &git_backup::get_status(&central_repo::skills_dir())?,
+                    cli.json,
+                )
             }
             GitCommand::Pull => {
                 git_backup::pull(&central_repo::skills_dir())?;
-                print_json(&git_backup::get_status(&central_repo::skills_dir())?, cli.json)
+                print_json(
+                    &git_backup::get_status(&central_repo::skills_dir())?,
+                    cli.json,
+                )
             }
             GitCommand::Push => {
                 git_backup::push(&central_repo::skills_dir())?;
-                print_json(&git_backup::get_status(&central_repo::skills_dir())?, cli.json)
+                print_json(
+                    &git_backup::get_status(&central_repo::skills_dir())?,
+                    cli.json,
+                )
             }
             GitCommand::Commit { message } => {
                 git_backup::commit_all(&central_repo::skills_dir(), &message)?;
                 let tag = git_backup::create_snapshot_tag(&central_repo::skills_dir())?;
                 print_json(&serde_json::json!({"ok": true, "tag": tag}), cli.json)
             }
-            GitCommand::Versions { limit } => {
-                print_json(&git_backup::list_snapshot_versions(&central_repo::skills_dir(), limit)?, cli.json)
-            }
+            GitCommand::Versions { limit } => print_json(
+                &git_backup::list_snapshot_versions(&central_repo::skills_dir(), limit)?,
+                cli.json,
+            ),
             GitCommand::Restore { tag } => {
                 git_backup::restore_snapshot_version(&central_repo::skills_dir(), &tag)?;
-                print_json(&git_backup::get_status(&central_repo::skills_dir())?, cli.json)
+                print_json(
+                    &git_backup::get_status(&central_repo::skills_dir())?,
+                    cli.json,
+                )
             }
         },
     }
@@ -300,20 +342,22 @@ fn repo_status(store: &app_lib::core::skill_store::SkillStore) -> RepoStatus {
         base_dir: central_repo::base_dir().to_string_lossy().to_string(),
         skills_dir: central_repo::skills_dir().to_string_lossy().to_string(),
         db_path: central_repo::db_path().to_string_lossy().to_string(),
-        metadata_dir: app_lib::core::sync_metadata::metadata_dir().to_string_lossy().to_string(),
+        metadata_dir: app_lib::core::sync_metadata::metadata_dir()
+            .to_string_lossy()
+            .to_string(),
         skill_count: store.get_all_skills().unwrap_or_default().len(),
         scenario_count: store.get_all_scenarios().unwrap_or_default().len(),
         active_scenario_id: store.get_active_scenario_id().unwrap_or(None),
     }
 }
 
-fn list_skills(store: &app_lib::core::skill_store::SkillStore) -> anyhow::Result<Vec<SkillSummary>> {
+fn list_skills(
+    store: &app_lib::core::skill_store::SkillStore,
+) -> anyhow::Result<Vec<SkillSummary>> {
     let tags_map = store.get_tags_map()?;
     let scenarios = store.get_all_scenarios()?;
-    let scenario_lookup: std::collections::HashMap<String, String> = scenarios
-        .into_iter()
-        .map(|s| (s.id, s.name))
-        .collect();
+    let scenario_lookup: std::collections::HashMap<String, String> =
+        scenarios.into_iter().map(|s| (s.id, s.name)).collect();
 
     let mut items = Vec::new();
     for skill in store.get_all_skills()? {
@@ -337,7 +381,10 @@ fn list_skills(store: &app_lib::core::skill_store::SkillStore) -> anyhow::Result
     Ok(items)
 }
 
-fn show_skill(store: &app_lib::core::skill_store::SkillStore, reference: &str) -> anyhow::Result<SkillDetail> {
+fn show_skill(
+    store: &app_lib::core::skill_store::SkillStore,
+    reference: &str,
+) -> anyhow::Result<SkillDetail> {
     let skill = resolve_skill(store, reference)?;
 
     let summary = list_skills(store)?
@@ -366,7 +413,11 @@ fn export_skill(
     dest: &Path,
 ) -> anyhow::Result<String> {
     let skill = resolve_skill(store, reference)?;
-    sync_engine::sync_skill(Path::new(&skill.central_path), dest, sync_engine::SyncMode::Copy)?;
+    sync_engine::sync_skill(
+        Path::new(&skill.central_path),
+        dest,
+        sync_engine::SyncMode::Copy,
+    )?;
     Ok(dest.to_string_lossy().to_string())
 }
 
@@ -395,13 +446,18 @@ fn resolve_skill(
     }
 }
 
-fn list_scenarios(store: &app_lib::core::skill_store::SkillStore) -> anyhow::Result<Vec<ScenarioInfo>> {
+fn list_scenarios(
+    store: &app_lib::core::skill_store::SkillStore,
+) -> anyhow::Result<Vec<ScenarioInfo>> {
     let active = store.get_active_scenario_id()?;
     let scenarios = store.get_all_scenarios()?;
     Ok(scenarios
         .into_iter()
         .map(|scenario| ScenarioInfo {
-            skill_count: store.get_skill_ids_for_scenario(&scenario.id).unwrap_or_default().len(),
+            skill_count: store
+                .get_skill_ids_for_scenario(&scenario.id)
+                .unwrap_or_default()
+                .len(),
             active: active.as_deref() == Some(scenario.id.as_str()),
             id: scenario.id,
             name: scenario.name,
@@ -412,7 +468,9 @@ fn list_scenarios(store: &app_lib::core::skill_store::SkillStore) -> anyhow::Res
         .collect())
 }
 
-fn current_scenario(store: &app_lib::core::skill_store::SkillStore) -> anyhow::Result<Option<ScenarioInfo>> {
+fn current_scenario(
+    store: &app_lib::core::skill_store::SkillStore,
+) -> anyhow::Result<Option<ScenarioInfo>> {
     let scenarios = list_scenarios(store)?;
     Ok(scenarios.into_iter().find(|scenario| scenario.active))
 }
@@ -438,7 +496,9 @@ fn resolve_scenario(
     match matches.len() {
         1 => Ok(matches.into_iter().next().unwrap()),
         0 => Err(anyhow::anyhow!("scenario not found: {reference}")),
-        _ => Err(anyhow::anyhow!("scenario reference is ambiguous: {reference}")),
+        _ => Err(anyhow::anyhow!(
+            "scenario reference is ambiguous: {reference}"
+        )),
     }
 }
 

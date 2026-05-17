@@ -159,6 +159,10 @@ pub async fn get_global_local_skill_document(
         let skill_dir = skills_root.join(&skill_relative_path);
         ensure_agent_skill_path(&skill_dir, &skills_root)?;
 
+        if sync_engine::is_wsl_unc_path(&skills_root) {
+            return read_wsl_skill_document(&skill_dir, &skill_relative_path);
+        }
+
         let allowed_roots = vec![skills_root];
         let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
         for candidate in &candidates {
@@ -197,6 +201,58 @@ pub async fn get_global_local_skill_document(
         ))
     })
     .await?
+}
+
+fn read_wsl_skill_document(
+    skill_dir: &Path,
+    skill_relative_path: &str,
+) -> Result<ProjectSkillDocumentDto, AppError> {
+    let dir_str = skill_dir.to_string_lossy();
+    let Some((distro, linux_path)) = wsl_unc_to_linux_path_agent(&dir_str) else {
+        return Err(AppError::not_found(
+            "Cannot resolve WSL path for skill document",
+        ));
+    };
+    let escaped = wsl_bash_escape_agent(&linux_path);
+    let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
+    for candidate in &candidates {
+        let file_path = format!("{escaped}/{candidate}");
+        let output = std::process::Command::new("wsl.exe")
+            .args([
+                "-d",
+                &distro,
+                "-e",
+                "/bin/bash",
+                "-c",
+                &format!("cat '{file_path}'"),
+            ])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() && !out.stdout.is_empty() {
+                return Ok(ProjectSkillDocumentDto {
+                    skill_name: skill_relative_path.to_string(),
+                    filename: candidate.to_string(),
+                    content: String::from_utf8_lossy(&out.stdout).to_string(),
+                });
+            }
+        }
+    }
+    Err(AppError::not_found(
+        "No document file found in skill directory",
+    ))
+}
+
+fn wsl_unc_to_linux_path_agent(unc_path: &str) -> Option<(String, String)> {
+    let rest = unc_path
+        .strip_prefix(r"\\wsl.localhost\")
+        .or_else(|| unc_path.strip_prefix("//wsl.localhost/"))?;
+    let (distro, win_path) = rest.split_once(|c: char| c == '\\' || c == '/')?;
+    let linux_path = "/".to_string() + &win_path.replace('\\', "/");
+    Some((distro.to_string(), linux_path))
+}
+
+fn wsl_bash_escape_agent(s: &str) -> String {
+    s.replace('\'', "'\\''")
 }
 
 #[tauri::command]

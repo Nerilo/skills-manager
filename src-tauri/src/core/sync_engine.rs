@@ -312,7 +312,7 @@ fn symlink_points_to(target: &Path, source: &Path) -> bool {
 }
 
 /// Check whether a path is a WSL UNC path (\\wsl.localhost\Distro\...).
-fn is_wsl_unc_path(path: &Path) -> bool {
+pub(crate) fn is_wsl_unc_path(path: &Path) -> bool {
     let s = path.to_string_lossy();
     s.starts_with(r"\\wsl.localhost\") || s.starts_with("//wsl.localhost/")
 }

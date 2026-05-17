@@ -2,6 +2,11 @@ import { useState, type ReactNode } from "react";
 import { Globe } from "lucide-react";
 import { cn } from "../utils";
 
+function baseAgentKey(key: string): string {
+  if (!key.startsWith("wsl:")) return key;
+  return key.split(":").slice(2).join(":") || key;
+}
+
 const AGENT_ICON_FILES: Record<string, string> = {
   adal: "adal.png",
   amp: "amp.svg",
@@ -51,12 +56,13 @@ const AGENT_ICON_FILES: Record<string, string> = {
 };
 
 function getAgentIconSrc(agentKey: string): string | null {
-  const file = AGENT_ICON_FILES[agentKey];
+  const base = baseAgentKey(agentKey);
+  const file = AGENT_ICON_FILES[base];
   return file ? `/agent-icons/${file}` : null;
 }
 
 export function hasAgentIcon(agentKey: string): boolean {
-  return Boolean(AGENT_ICON_FILES[agentKey]);
+  return Boolean(AGENT_ICON_FILES[baseAgentKey(agentKey)]);
 }
 
 interface AgentIconProps {

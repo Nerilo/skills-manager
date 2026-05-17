@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use super::{content_hash, skill_metadata};
+use super::{content_hash, skill_metadata, sync_engine};
 
 /// Lightweight config describing where an agent keeps project-level skills.
 #[derive(Debug, Clone)]
@@ -118,6 +118,268 @@ fn should_skip_dir(root: &Path, dir: &Path) -> bool {
     dir != root && dir.join("skills").is_dir()
 }
 
+fn push_skill_info(
+    root: &Path,
+    path: &Path,
+    enabled: bool,
+    agent: &str,
+    agent_display_name: &str,
+    skills: &mut Vec<ProjectSkillInfo>,
+) {
+    let dir_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let relative_path = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let meta = skill_metadata::parse_skill_md(path);
+    let name = meta
+        .name
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| dir_name.clone());
+
+    let files = list_files(path);
+
+    skills.push(ProjectSkillInfo {
+        name,
+        dir_name: dir_name.clone(),
+        relative_path,
+        description: meta.description,
+        path: path.to_string_lossy().to_string(),
+        files,
+        enabled,
+        agent: agent.to_string(),
+        agent_display_name: agent_display_name.to_string(),
+        tags: Vec::new(),
+        in_center: false,
+        sync_status: "project_only".to_string(),
+        center_skill_id: None,
+        last_modified_at: latest_modified_millis(path),
+        content_hash: content_hash::hash_directory(path).ok(),
+    });
+}
+
+fn is_wsl_symlink_skill_dir(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    let Some((distro, linux_path)) = wsl_unc_to_linux_path(&path_str) else {
+        return false;
+    };
+    wsl_path_has_skill_marker(&distro, &linux_path)
+}
+
+fn push_wsl_symlink_skill_info(
+    root: &Path,
+    path: &Path,
+    enabled: bool,
+    agent: &str,
+    agent_display_name: &str,
+    skills: &mut Vec<ProjectSkillInfo>,
+) {
+    let dir_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let relative_path = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let path_str = path.to_string_lossy();
+    let meta = if let Some((distro, linux_path)) = wsl_unc_to_linux_path(&path_str) {
+        wsl_read_skill_md(&distro, &linux_path)
+    } else {
+        skill_metadata::SkillMeta {
+            name: None,
+            description: None,
+        }
+    };
+
+    let name = meta
+        .name
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| dir_name.clone());
+
+    let files = wsl_list_files_for_skill(&path_str);
+
+    let (content_hash, last_modified_at) =
+        if let Some((distro, linux_path)) = wsl_unc_to_linux_path(&path_str) {
+            let hash = wsl_content_hash_via_readlink(&distro, &linux_path);
+            let modified = wsl_latest_modified_millis(&distro, &linux_path);
+            (hash, modified)
+        } else {
+            (None, None)
+        };
+
+    skills.push(ProjectSkillInfo {
+        name,
+        dir_name: dir_name.clone(),
+        relative_path,
+        description: meta.description,
+        path: path.to_string_lossy().to_string(),
+        files,
+        enabled,
+        agent: agent.to_string(),
+        agent_display_name: agent_display_name.to_string(),
+        tags: Vec::new(),
+        in_center: false,
+        sync_status: "project_only".to_string(),
+        center_skill_id: None,
+        last_modified_at,
+        content_hash,
+    });
+}
+
+fn wsl_unc_to_linux_path(unc_path: &str) -> Option<(String, String)> {
+    let rest = unc_path
+        .strip_prefix(r"\\wsl.localhost\")
+        .or_else(|| unc_path.strip_prefix("//wsl.localhost/"))?;
+    let (distro, win_path) = rest.split_once(|c: char| c == '\\' || c == '/')?;
+    let linux_path = "/".to_string() + &win_path.replace('\\', "/");
+    Some((distro.to_string(), linux_path))
+}
+
+fn wsl_path_has_skill_marker(distro: &str, linux_path: &str) -> bool {
+    let escaped = wsl_bash_escape(linux_path);
+    let output = std::process::Command::new("wsl.exe")
+        .args([
+            "-d",
+            distro,
+            "-e",
+            "/bin/bash",
+            "-c",
+            &format!(
+                "if [ -d '{escaped}' ] && ([ -f '{escaped}/SKILL.md' ] || [ -f '{escaped}/skill.md' ]); then echo YES; fi"
+            ),
+        ])
+        .output();
+    match output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "YES",
+        Err(_) => false,
+    }
+}
+
+fn wsl_read_skill_md(distro: &str, linux_path: &str) -> skill_metadata::SkillMeta {
+    let escaped = wsl_bash_escape(linux_path);
+    let candidates = ["SKILL.md", "skill.md"];
+    for candidate in &candidates {
+        let file_path = format!("{escaped}/{candidate}");
+        let output = std::process::Command::new("wsl.exe")
+            .args([
+                "-d",
+                distro,
+                "-e",
+                "/bin/bash",
+                "-c",
+                &format!("cat '{file_path}'"),
+            ])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let content = String::from_utf8_lossy(&out.stdout);
+                let meta = skill_metadata::parse_frontmatter(&content);
+                if meta.name.is_some() {
+                    return meta;
+                }
+            }
+        }
+    }
+    skill_metadata::SkillMeta {
+        name: None,
+        description: None,
+    }
+}
+
+fn wsl_list_files_for_skill(unc_path: &str) -> Vec<String> {
+    let Some((distro, linux_path)) = wsl_unc_to_linux_path(unc_path) else {
+        return Vec::new();
+    };
+    let escaped = wsl_bash_escape(&linux_path);
+    let output = std::process::Command::new("wsl.exe")
+        .args([
+            "-d",
+            &distro,
+            "-e",
+            "/bin/bash",
+            "-c",
+            &format!("find -L '{escaped}' -maxdepth 1 -type f -printf '%f\\n'"),
+        ])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn wsl_bash_escape(s: &str) -> String {
+    s.replace('\'', "'\\''")
+}
+
+fn wsl_content_hash_via_readlink(distro: &str, linux_path: &str) -> Option<String> {
+    let escaped = wsl_bash_escape(linux_path);
+    let output = std::process::Command::new("wsl.exe")
+        .args([
+            "-d",
+            distro,
+            "-e",
+            "/bin/bash",
+            "-c",
+            &format!("readlink -f '{escaped}'"),
+        ])
+        .output();
+    let Ok(out) = output else { return None };
+    if !out.status.success() {
+        return None;
+    }
+    let target_linux = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if target_linux.is_empty() {
+        return None;
+    }
+    let target_unc = format!(
+        r"\\wsl.localhost\{}\{}",
+        distro,
+        target_linux.trim_start_matches('/').replace('/', r"\")
+    );
+    let target_path = PathBuf::from(&target_unc);
+    if target_path.is_dir() {
+        content_hash::hash_directory(&target_path).ok()
+    } else {
+        None
+    }
+}
+
+fn wsl_latest_modified_millis(distro: &str, linux_path: &str) -> Option<i64> {
+    let escaped = wsl_bash_escape(linux_path);
+    let output = std::process::Command::new("wsl.exe")
+        .args([
+            "-d",
+            distro,
+            "-e",
+            "/bin/bash",
+            "-c",
+            &format!(
+                "find -L '{escaped}' -type f \\( -name '.DS_Store' -o -name '.git' \\) -prune -o -type f -printf '%T@\\0' | tr '\\0' '\\n' | sort -rn | head -1"
+            ),
+        ])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let ts: f64 = stdout.parse().ok()?;
+            Some((ts * 1000.0) as i64)
+        }
+        _ => None,
+    }
+}
+
 fn read_skills_from_dir(
     dir: &Path,
     enabled: bool,
@@ -159,54 +421,31 @@ fn read_skills_from_dir_recursive(
         return;
     };
 
+    let root_is_wsl_unc = sync_engine::is_wsl_unc_path(root);
+
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if !path.is_dir() {
+        let file_type = entry.file_type().ok();
+
+        let is_dir = path.is_dir();
+        let is_wsl_symlink_dir = !is_dir
+            && root_is_wsl_unc
+            && file_type.as_ref().map_or(false, |ft| ft.is_symlink())
+            && is_wsl_symlink_skill_dir(&path);
+
+        if !is_dir && !is_wsl_symlink_dir {
             continue;
         }
 
-        if skill_metadata::is_valid_skill_dir(&path) {
-            let dir_name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let relative_path = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-
-            let meta = skill_metadata::parse_skill_md(&path);
-            let name = meta
-                .name
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| dir_name.clone());
-
-            let files = list_files(&path);
-
-            skills.push(ProjectSkillInfo {
-                name,
-                dir_name: dir_name.clone(),
-                relative_path,
-                description: meta.description,
-                path: path.to_string_lossy().to_string(),
-                files,
-                enabled,
-                agent: agent.to_string(),
-                agent_display_name: agent_display_name.to_string(),
-                tags: Vec::new(),
-                in_center: false,
-                sync_status: "project_only".to_string(),
-                center_skill_id: None,
-                last_modified_at: latest_modified_millis(&path),
-                content_hash: content_hash::hash_directory(&path).ok(),
-            });
+        if is_dir && skill_metadata::is_valid_skill_dir(&path) {
+            push_skill_info(root, &path, enabled, agent, agent_display_name, skills);
             continue;
         }
 
-        // Only check visited set before recursing into namespace dirs
-        // to prevent symlink cycles. Skill dirs (above) are leaf nodes and
-        // are allowed to alias the same canonical target.
+        if is_wsl_symlink_dir {
+            push_wsl_symlink_skill_info(root, &path, enabled, agent, agent_display_name, skills);
+            continue;
+        }
 
         if !recursive || should_skip_dir(root, &path) {
             continue;
@@ -354,6 +593,7 @@ fn latest_modified_millis(dir: &Path) -> Option<i64> {
 mod tests {
     use super::{read_linked_workspace_skills, read_project_skills, AgentSkillConfig};
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -511,5 +751,75 @@ mod tests {
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "codex-tool");
+    }
+
+    #[test]
+    fn wsl_lx_symlink_dir_entries_are_invisible_to_is_dir() {
+        let unc = r"\\wsl.localhost\Ubuntu-24.04\home\xps\.config\opencode\skills";
+        if !std::path::Path::new(unc).is_dir() {
+            eprintln!("SKIP: WSL UNC path not accessible on this machine");
+            return;
+        }
+        let entries: Vec<_> = std::fs::read_dir(unc)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(!entries.is_empty(), "should have at least one entry");
+        let dir_count = entries
+            .iter()
+            .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+            .count();
+        assert_eq!(
+            dir_count, 0,
+            "LX_SYMLINK dir entries should report is_dir=false (this is the bug)"
+        );
+    }
+
+    #[test]
+    fn wsl_unc_path_scanning_finds_skills_behind_lx_symlinks() {
+        let unc = PathBuf::from(r"\\wsl.localhost\Ubuntu-24.04\home\xps\.config\opencode\skills");
+        if !unc.is_dir() {
+            eprintln!("SKIP: WSL UNC path not accessible on this machine");
+            return;
+        }
+        let skills = super::read_linked_workspace_skills(
+            &unc,
+            None,
+            "wsl:Ubuntu-24.04:opencode",
+            "OpenCode (Ubuntu-24.04)",
+            false,
+        );
+        assert!(
+            skills.len() >= 5,
+            "should find at least 5 skills behind LX_SYMLINKs, found {}",
+            skills.len(),
+        );
+        assert!(
+            skills.iter().any(|s| s.name == "caveman"),
+            "should find 'caveman' skill"
+        );
+        assert!(
+            skills.iter().all(|s| !s.path.is_empty()),
+            "all skills should have a path"
+        );
+        assert!(
+            skills.iter().any(|s| s.content_hash.is_some()),
+            "at least one skill should have a content_hash"
+        );
+        assert!(
+            skills.iter().any(|s| s.last_modified_at.is_some()),
+            "at least one skill should have last_modified_at"
+        );
+        let caveman = skills.iter().find(|s| s.name == "caveman").unwrap();
+        let caveman_hash = caveman.content_hash.as_deref().unwrap();
+        let real_dir =
+            PathBuf::from(r"\\wsl.localhost\Ubuntu-24.04\home\xps\.skills-manager\caveman");
+        if real_dir.is_dir() {
+            let expected_hash = crate::core::content_hash::hash_directory(&real_dir).unwrap();
+            assert_eq!(
+                caveman_hash, &expected_hash,
+                "WSL symlink skill hash must match content_hash::hash_directory of the real target"
+            );
+        }
     }
 }
