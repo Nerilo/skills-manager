@@ -1276,13 +1276,18 @@ mod tests {
         central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
         let store = SkillStore::new(&tmp.path().join("project-export-wsl.db")).unwrap();
         let central_skill = central_repo::skills_dir().join("demo-skill");
-        let replica_root = tmp.path().join("replica");
+        let replica_root = tmp.path().join(".skills-manager");
         let project_root = tmp.path().join("project");
         fs::create_dir_all(&central_skill).unwrap();
         fs::create_dir_all(replica_root.join("demo-skill")).unwrap();
         fs::create_dir_all(&project_root).unwrap();
         fs::write(central_skill.join("SKILL.md"), "# fresh").unwrap();
         fs::write(replica_root.join("demo-skill").join("SKILL.md"), "# stale").unwrap();
+        fs::write(
+            replica_root.join(".skills-manager-owner"),
+            "skills-manager library replica\n",
+        )
+        .unwrap();
         store
             .insert_skill(&sample_center_skill(&central_skill))
             .unwrap();
@@ -1319,7 +1324,7 @@ mod tests {
         central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
         let store = SkillStore::new(&tmp.path().join("project-update-wsl.db")).unwrap();
         let central_skill = central_repo::skills_dir().join("demo-skill");
-        let replica_root = tmp.path().join("replica");
+        let replica_root = tmp.path().join(".skills-manager");
         let project_root = tmp.path().join("project");
         let project_skill = project_root
             .join(".codex")
@@ -1336,6 +1341,11 @@ mod tests {
         fs::write(
             replica_root.join("demo-skill").join("SKILL.md"),
             "---\nname: demo-skill\n---\n# stale replica",
+        )
+        .unwrap();
+        fs::write(
+            replica_root.join(".skills-manager-owner"),
+            "skills-manager library replica\n",
         )
         .unwrap();
         fs::write(

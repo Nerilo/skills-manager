@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use super::process;
 
+const REPLICA_OWNERSHIP_MARKER: &str = ".skills-manager-owner";
+
 /// Refuse to copy when `dst` would land inside `src` (or equal `src`).
 /// Otherwise the recursive copy walks into the freshly-created `dst` and
 /// produces unbounded `<dst>/<dst>/<dst>/...` nesting (issue #61).
@@ -257,12 +259,26 @@ pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> R
     }
 
     ensure_dst_not_inside_src(primary_library, library_replica)?;
+    ensure_library_replica_ownership(library_replica)?;
     remove_target(library_replica)
         .with_context(|| format!("Failed to remove existing target {:?}", library_replica))?;
-    copy_dir_recursive(primary_library, library_replica)
+    copy_dir_recursive(primary_library, library_replica)?;
+    std::fs::write(
+        library_replica.join(REPLICA_OWNERSHIP_MARKER),
+        "skills-manager library replica\n",
+    )
+    .with_context(|| {
+        format!(
+            "Failed to write Library Replica ownership marker {:?}",
+            library_replica.join(REPLICA_OWNERSHIP_MARKER)
+        )
+    })
 }
 
 fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
+    if library_replica.file_name().and_then(|name| name.to_str()) != Some(".skills-manager") {
+        anyhow::bail!("Library Replica target must end with a dedicated .skills-manager directory");
+    }
     if is_wsl_unc_path(library_replica) {
         let raw = library_replica.to_string_lossy();
         let normalized = raw.replace('/', r"\");
@@ -284,6 +300,29 @@ fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn ensure_library_replica_ownership(library_replica: &Path) -> Result<()> {
+    if !library_replica.exists() {
+        return Ok(());
+    }
+    if !library_replica.is_dir() {
+        anyhow::bail!("Library Replica target must be a directory");
+    }
+    if library_replica.join(REPLICA_OWNERSHIP_MARKER).is_file() {
+        return Ok(());
+    }
+    let is_empty = std::fs::read_dir(library_replica)
+        .with_context(|| format!("Failed to inspect Library Replica {:?}", library_replica))?
+        .next()
+        .is_none();
+    if is_empty {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Library Replica target {:?} is missing ownership marker; refusing to delete it",
+        library_replica
+    )
 }
 
 pub fn is_target_current(source: &Path, target: &Path, mode: SyncMode) -> bool {
@@ -337,9 +376,61 @@ fn remove_wsl_target(target: &Path) -> Result<()> {
     let raw = target.to_string_lossy();
     let normalized = raw.replace('/', r"\");
     let distro = wsl_distro_from_unc(&normalized)?;
-    let linux_path = wsl_linux_path_from_unc(&distro, &normalized)?;
+    let linux_path = wsl_linux_path_from_unc(&distro, &normalized).map_err(|_| {
+        anyhow::anyhow!("Refusing to delete unsafe WSL target {:?}: path must be inside a safe WSL skills or replica directory", target)
+    })?;
+    ensure_safe_wsl_delete_target(target, &linux_path)?;
 
     run_wsl_fixed(&distro, &["rm", "-rf", &linux_path], "remove WSL target")
+}
+
+fn ensure_safe_wsl_delete_target(target: &Path, linux_path: &str) -> Result<()> {
+    let parts: Vec<&str> = linux_path
+        .trim_matches('/')
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let unsafe_err = || {
+        anyhow::anyhow!(
+            "Refusing to delete unsafe WSL target {:?}: path must be inside a safe WSL skills or replica directory",
+            target
+        )
+    };
+    if parts.is_empty()
+        || parts.iter().any(|part| *part == "." || *part == "..")
+        || parts.first().copied() == Some("mnt")
+    {
+        return Err(unsafe_err());
+    }
+
+    if parts.last().copied() == Some(".skills-manager") {
+        if target.join(REPLICA_OWNERSHIP_MARKER).is_file() {
+            return Ok(());
+        }
+        return Err(anyhow::anyhow!(
+            "Refusing to delete unsafe WSL target {:?}: Library Replica ownership marker is missing",
+            target
+        ));
+    }
+
+    if is_safe_wsl_skill_leaf(&parts) {
+        return Ok(());
+    }
+
+    Err(unsafe_err())
+}
+
+fn is_safe_wsl_skill_leaf(parts: &[&str]) -> bool {
+    if parts.len() < 5 || parts[0] != "home" || parts[1].is_empty() {
+        return false;
+    }
+    let Some(skills_index) = parts.iter().position(|part| *part == "skills") else {
+        return false;
+    };
+    if skills_index + 1 >= parts.len() {
+        return false;
+    }
+    parts[2].starts_with('.') || parts[..skills_index].contains(&".config")
 }
 
 pub fn remove_target(target: &Path) -> Result<()> {
@@ -712,6 +803,11 @@ mod tests {
         fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
 
         fs::create_dir_all(replica.join("hello")).unwrap();
+        fs::write(
+            replica.join(REPLICA_OWNERSHIP_MARKER),
+            "skills-manager library replica\n",
+        )
+        .unwrap();
         fs::write(replica.join("hello/SKILL.md"), "# replica edit").unwrap();
         fs::create_dir_all(replica.join("replica-only")).unwrap();
         fs::write(replica.join("replica-only/SKILL.md"), "# drift").unwrap();
@@ -726,6 +822,7 @@ mod tests {
             fs::read_to_string(replica.join("hello/SKILL.md")).unwrap(),
             "# primary"
         );
+        assert!(replica.join(REPLICA_OWNERSHIP_MARKER).is_file());
         assert!(!replica.join("replica-only").exists());
     }
 
@@ -733,12 +830,7 @@ mod tests {
     fn sync_library_replica_allows_normalized_runtime_paths() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
-        let replica = tmp
-            .path()
-            .join("home")
-            .join("me")
-            .join(".codex")
-            .join("skills");
+        let replica = tmp.path().join("home").join("me").join(".skills-manager");
         fs::create_dir_all(primary.join("hello")).unwrap();
         fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
 
@@ -774,6 +866,25 @@ mod tests {
     }
 
     #[test]
+    fn sync_library_replica_refuses_to_delete_existing_unmarked_replica() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = tmp.path().join("runtime").join(".skills-manager");
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(primary.join("SKILL.md"), "# primary").unwrap();
+        fs::create_dir_all(&replica).unwrap();
+        fs::write(replica.join("user-file.txt"), "keep").unwrap();
+
+        let err = sync_library_replica(&primary, &replica).unwrap_err();
+
+        assert!(err.to_string().contains("ownership marker"), "{err}");
+        assert_eq!(
+            fs::read_to_string(replica.join("user-file.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
     fn sync_library_replica_reports_unreachable_parent_path() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
@@ -795,7 +906,7 @@ mod tests {
     fn sync_library_replica_rejects_shallow_target() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
-        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home");
+        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\.skills-manager");
         fs::create_dir_all(&primary).unwrap();
         fs::write(primary.join("SKILL.md"), "# primary").unwrap();
 
@@ -950,7 +1061,7 @@ mod tests {
         // The function should detect the WSL UNC path and attempt wsl.exe removal.
         // Since this test doesn't have WSL, it should return an Err containing
         // "wsl.exe" or "Failed to start" in the error message.
-        let invalid = Path::new(r"\\wsl.localhost\NonexistentDistro\path\to\skill");
+        let invalid = Path::new(r"\\wsl.localhost\NonexistentDistro\home\me\.codex\skills\demo");
         let result = remove_target(invalid);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -960,5 +1071,23 @@ mod tests {
                 || err.contains("remove WSL target"),
             "expected wsl.exe error, got: {err}"
         );
+    }
+
+    #[test]
+    fn remove_target_rejects_unsafe_wsl_paths_before_wsl_exec() {
+        for path in [
+            r"\\wsl.localhost\Ubuntu\",
+            r"\\wsl.localhost\Ubuntu\home\me",
+            r"\\wsl.localhost\Ubuntu\home\me\project",
+            r"\\wsl.localhost\Ubuntu\home\me\.codex",
+            r"\\wsl.localhost\Ubuntu\home\me\.claude",
+            r"\\wsl.localhost\Ubuntu\home\me\.codex\skills",
+            r"\\wsl.localhost\Ubuntu\home\me\..\other\.codex\skills\demo",
+            r"\\wsl.localhost\Ubuntu\mnt\c",
+            r"\\wsl.localhost\Ubuntu\mnt\c\Users\me\project",
+        ] {
+            let err = remove_target(Path::new(path)).unwrap_err();
+            assert!(err.to_string().contains("safe WSL"), "{path}: {err}");
+        }
     }
 }

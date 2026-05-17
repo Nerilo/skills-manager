@@ -308,17 +308,67 @@ fn normalize_agent_target_path(distro_name: &str, raw: &str) -> Result<String> {
     if raw.is_empty() {
         bail!("Agent Target path is required");
     }
-    if raw.starts_with(r"\\") || raw.starts_with("//") || raw.contains(':') {
-        return normalize_library_replica_path(distro_name, raw);
+    if raw.starts_with(r"\\") || raw.starts_with("//") {
+        return normalize_agent_target_unc_path(distro_name, raw);
+    }
+    if let Some((path_distro, linux_path)) = raw.split_once(':') {
+        let path_distro = normalize_distro_name(path_distro)?;
+        ensure_same_distro(distro_name, &path_distro)?;
+        if !linux_path.starts_with('/') {
+            bail!("Agent Target path must use /home/user/..., Distro:/home/user/..., or \\\\wsl.localhost\\Distro\\...");
+        }
+        let replica = normalize_agent_target_linux_path(linux_path)?;
+        return Ok(format!(r"\\wsl.localhost\{distro_name}\{replica}"));
     }
     if raw.starts_with('/') {
-        let replica = raw.trim_start_matches('/').replace('/', r"\");
-        if replica.is_empty() {
-            bail!("Agent Target path must include a directory inside the distro");
-        }
+        let replica = normalize_agent_target_linux_path(raw)?;
         return Ok(format!(r"\\wsl.localhost\{distro_name}\{replica}"));
     }
     bail!("Agent Target path must use /home/user/..., Distro:/home/user/..., or \\\\wsl.localhost\\Distro\\...")
+}
+
+fn normalize_agent_target_unc_path(distro_name: &str, raw: &str) -> Result<String> {
+    let path = raw.replace('/', r"\");
+    let prefix = r"\\wsl.localhost\";
+    let Some(rest) = path.strip_prefix(prefix) else {
+        bail!("Agent Target path must start with \\\\wsl.localhost\\Distro\\");
+    };
+    let Some((path_distro, replica)) = rest.split_once('\\') else {
+        bail!("Agent Target path must include a directory inside the distro");
+    };
+    let path_distro = normalize_distro_name(path_distro)?;
+    ensure_same_distro(distro_name, &path_distro)?;
+    let linux_path = format!("/{}", replica.trim_matches('\\').replace('\\', "/"));
+    let replica = normalize_agent_target_linux_path(&linux_path)?;
+    Ok(format!(r"\\wsl.localhost\{distro_name}\{replica}"))
+}
+
+fn normalize_agent_target_linux_path(raw: &str) -> Result<String> {
+    let parts: Vec<&str> = raw
+        .trim_matches('/')
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        bail!("Agent Target path must include a safe skills directory inside the distro");
+    }
+    if parts.iter().any(|part| *part == "." || *part == "..") {
+        bail!("Agent Target path cannot contain . or .. segments");
+    }
+    if parts.first().copied() == Some("mnt") {
+        bail!("Agent Target path cannot use /mnt/* roots");
+    }
+    if parts.len() < 4 || parts[0] != "home" || parts[1].is_empty() {
+        bail!("Agent Target path must be a safe /home/<user>/.../skills directory");
+    }
+    if parts.last().copied() != Some("skills") {
+        bail!("Agent Target path must end at a skills directory");
+    }
+    let namespace = parts[2];
+    if !(namespace.starts_with('.') || parts.contains(&".config")) {
+        bail!("Agent Target path must be under an app configuration skills directory");
+    }
+    Ok(parts.join(r"\"))
 }
 
 fn default_agent_target_base_from_library_replica(
@@ -463,7 +513,7 @@ mod tests {
             .expect("Windows disabled tools should save");
 
         set_agent_target_enabled(&store, "Ubuntu", "codex", false).unwrap();
-        set_agent_target_path(&store, "Ubuntu", "codex", "/home/me/wsl-codex").unwrap();
+        set_agent_target_path(&store, "Ubuntu", "codex", "/home/me/.codex/skills").unwrap();
 
         let runtime = get_runtime_environment(&store, "Ubuntu").unwrap();
         assert_eq!(
@@ -471,7 +521,7 @@ mod tests {
             vec![WslAgentTargetConfig {
                 key: "codex".to_string(),
                 enabled: false,
-                skills_dir: Some(r"\\wsl.localhost\Ubuntu\home\me\wsl-codex".to_string()),
+                skills_dir: Some(r"\\wsl.localhost\Ubuntu\home\me\.codex\skills".to_string()),
             }]
         );
         assert_eq!(
@@ -494,6 +544,41 @@ mod tests {
         assert_eq!(updated.agent_targets.len(), 1);
         assert_eq!(updated.agent_targets[0].key, "codex");
         assert!(!updated.agent_targets[0].enabled);
+    }
+
+    #[test]
+    fn rejects_dangerous_wsl_agent_target_paths() {
+        for path in [
+            "",
+            "/",
+            "/home/me",
+            "/home/me/project",
+            "/home/me/.codex",
+            "/home/me/.claude",
+            "/home/me/../other/.codex/skills",
+            "/mnt/c",
+            "/mnt/c/Users/me/project",
+            "Ubuntu:/home/me/.codex",
+            r"\\wsl.localhost\Ubuntu\home\me\.claude",
+        ] {
+            let err = normalize_agent_target_path("Ubuntu", path).unwrap_err();
+            assert!(
+                err.to_string().contains("Agent Target path"),
+                "{path}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_known_wsl_agent_target_skill_roots() {
+        assert_eq!(
+            normalize_agent_target_path("Ubuntu", "/home/me/.codex/skills").unwrap(),
+            r"\\wsl.localhost\Ubuntu\home\me\.codex\skills"
+        );
+        assert_eq!(
+            normalize_agent_target_path("Ubuntu", "/home/me/.claude/skills").unwrap(),
+            r"\\wsl.localhost\Ubuntu\home\me\.claude\skills"
+        );
     }
 
     #[test]

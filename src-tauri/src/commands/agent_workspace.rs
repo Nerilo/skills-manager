@@ -623,7 +623,7 @@ mod tests {
         let store = SkillStore::new(&db_path).unwrap();
 
         let central_skill = central_repo::skills_dir().join("demo-skill");
-        let replica_root = temp.path().join("wsl-replica");
+        let replica_root = temp.path().join(".skills-manager");
         let replica_skill = replica_root.join("demo-skill");
         let wsl_skills_root = temp.path().join("wsl-agent-skills");
         let target_skill = wsl_skills_root.join("demo-skill");
@@ -638,6 +638,11 @@ mod tests {
         std::fs::write(
             replica_skill.join("SKILL.md"),
             "---\nname: demo-skill\n---\nstale replica\n",
+        )
+        .unwrap();
+        std::fs::write(
+            replica_root.join(".skills-manager-owner"),
+            "skills-manager library replica\n",
         )
         .unwrap();
         std::fs::write(

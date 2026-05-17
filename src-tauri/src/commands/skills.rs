@@ -1960,13 +1960,18 @@ mod tests {
         let repo = test_repo();
         let central_skill = write_skill_dir("demo-skill");
         fs::write(central_skill.join("SKILL.md"), "# fresh").unwrap();
-        let replica_root = central_repo::base_dir().join("replica");
+        let replica_root = central_repo::base_dir().join(".skills-manager");
         let replica_skill = replica_root.join("demo-skill");
         let target_root = central_repo::base_dir().join("wsl-target");
         let target_skill = target_root.join("demo-skill");
         fs::create_dir_all(&replica_skill).unwrap();
         fs::create_dir_all(&target_skill).unwrap();
         fs::write(replica_skill.join("SKILL.md"), "# stale replica").unwrap();
+        fs::write(
+            replica_root.join(".skills-manager-owner"),
+            "skills-manager library replica\n",
+        )
+        .unwrap();
         fs::write(target_skill.join("SKILL.md"), "# stale target").unwrap();
         repo.store
             .insert_skill(&sample_skill("skill-1", "demo-skill", &central_skill))
