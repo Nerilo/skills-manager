@@ -332,13 +332,13 @@ fn update_agent_local_skill_from_center(
 #[cfg(test)]
 mod tests {
     use super::{
-        enrich_center_status, import_agent_local_skill_to_center,
+        enrich_center_status, import_agent_local_skill_to_center, read_agent_local_skills,
         update_agent_local_skill_from_center,
     };
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
     use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillStore};
-    use crate::core::{central_repo, installer};
+    use crate::core::{central_repo, installer, tool_adapters};
     use std::collections::HashMap;
 
     #[test]
@@ -532,6 +532,119 @@ mod tests {
                 .unwrap();
         assert!(original_content.contains("Center copy"));
         assert!(skills.iter().any(|skill| skill.name == "local-tool-2"));
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn get_global_local_skills_works_with_wsl_style_custom_tool() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        // Create a "WSL" skills directory with local paths (simulating WSL UNC)
+        let wsl_skills_root = temp.path().join("wsl-skills");
+        let skill_one = wsl_skills_root.join("my-skill");
+        let skill_two = wsl_skills_root.join("another-skill");
+        std::fs::create_dir_all(&skill_one).unwrap();
+        std::fs::create_dir_all(&skill_two).unwrap();
+        std::fs::write(
+            skill_one.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: First skill\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            skill_two.join("SKILL.md"),
+            "---\nname: another-skill\ndescription: Second skill\n---\n",
+        )
+        .unwrap();
+        // A directory without SKILL.md should be ignored
+        let not_a_skill = wsl_skills_root.join("not-a-skill");
+        std::fs::create_dir_all(&not_a_skill).unwrap();
+
+        // Create a WSL runtime environment with opencode agent target
+        let replica_root = temp.path().join(".skills-manager");
+        std::fs::create_dir_all(&replica_root).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu-24.04",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "opencode",
+                        "enabled": true,
+                        "skills_dir": wsl_skills_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+
+        // Create a managed skill that matches via source_ref to verify enrichment
+        let managed_skill = SkillRecord {
+            id: "center-skill".to_string(),
+            name: "my-skill".to_string(),
+            description: Some("Center version".to_string()),
+            source_type: "import".to_string(),
+            source_ref: Some(skill_one.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: skill_one.to_string_lossy().to_string(),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: Some(1),
+            last_check_error: None,
+        };
+        store.insert_skill(&managed_skill).unwrap();
+
+        // Now call the actual scan & enrich pipeline that get_global_local_skills uses
+        let adapter = tool_adapters::all_tool_adapters(&store)
+            .into_iter()
+            .find(|a| a.key == "wsl:Ubuntu-24.04:opencode")
+            .expect("WSL OpenCode adapter should exist");
+
+        let skills = read_agent_local_skills(&adapter);
+        assert_eq!(
+            skills.len(),
+            2,
+            "should find 2 valid skills, ignoring not-a-skill"
+        );
+
+        let all_managed = store.get_all_skills().unwrap();
+        let all_targets = store.get_all_targets().unwrap();
+        let tags_map = store.get_tags_map().unwrap_or_default();
+        let enriched = enrich_center_status(skills, &all_managed, &all_targets, &tags_map);
+
+        assert_eq!(enriched.len(), 2);
+        assert!(
+            enriched.iter().any(|s| s.name == "my-skill" && s.in_center),
+            "my-skill should be matched to center via source_ref"
+        );
+        assert!(
+            enriched
+                .iter()
+                .any(|s| s.name == "another-skill" && !s.in_center),
+            "another-skill should not be matched to center"
+        );
+        assert_eq!(
+            enriched
+                .iter()
+                .find(|s| s.name == "my-skill")
+                .unwrap()
+                .agent,
+            "wsl:Ubuntu-24.04:opencode"
+        );
 
         central_repo::set_test_base_dir_override(None);
     }

@@ -26,6 +26,39 @@ pub(crate) fn sync_skill_to_active_scenario(
     scenario_service::sync_skill_to_active_scenario(store, scenario_id, skill_id)
 }
 
+fn remove_skill_from_scenario_internal(
+    store: &SkillStore,
+    scenario_id: &str,
+    skill_id: &str,
+) -> Result<(), AppError> {
+    sync_metadata::with_repo_lock("remove skill from scenario", || {
+        store.remove_skill_from_scenario(scenario_id, skill_id)?;
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)?;
+
+    // If this is the active scenario, unsync the skill.
+    if let Ok(Some(active_id)) = store.get_active_scenario_id() {
+        if active_id == scenario_id {
+            let targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
+            for target in &targets {
+                let path = PathBuf::from(&target.target_path);
+                if let Err(e) = sync_engine::remove_target(&path) {
+                    log::warn!("Failed to remove sync target {}: {e}", path.display());
+                }
+                if let Err(e) = store.delete_target(skill_id, &target.tool) {
+                    log::warn!(
+                        "Failed to delete target record for skill {skill_id}, tool {}: {e}",
+                        target.tool
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 pub struct ScenarioDto {
     pub id: String,
@@ -289,32 +322,7 @@ pub async fn remove_skill_from_scenario(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        sync_metadata::with_repo_lock("remove skill from scenario", || {
-            store.remove_skill_from_scenario(&scenario_id, &skill_id)?;
-            sync_metadata::write_all_from_db_unlocked(&store)
-        })
-        .map_err(AppError::db)?;
-
-        // If this is the active scenario, unsync the skill
-        if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-            if active_id == scenario_id {
-                let targets = store.get_targets_for_skill(&skill_id).unwrap_or_default();
-                for target in &targets {
-                    let path = PathBuf::from(&target.target_path);
-                    if let Err(e) = sync_engine::remove_target(&path) {
-                        log::warn!("Failed to remove sync target {}: {e}", path.display());
-                    }
-                    if let Err(e) = store.delete_target(&skill_id, &target.tool) {
-                        log::warn!(
-                            "Failed to delete target record for skill {skill_id}, tool {}: {e}",
-                            target.tool
-                        );
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        remove_skill_from_scenario_internal(&store, &scenario_id, &skill_id)
     })
     .await?;
     if result.is_ok() {
@@ -391,11 +399,15 @@ pub(crate) fn unsync_scenario_skills(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::core::scenario_service::{
         collect_scenario_sync_targets, sync_desired_targets, unsync_obsolete_scenario_targets,
     };
     use crate::core::skill_store::SkillRecord;
-    use crate::core::tool_adapters::{self, CustomToolDef};
+    use crate::core::{
+        central_repo,
+        tool_adapters::{self, CustomToolDef},
+    };
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
@@ -537,6 +549,121 @@ mod tests {
         assert!(targets
             .iter()
             .any(|target| target.skill_id == "new-only" && target.tool == "test_agent"));
+    }
+
+    #[test]
+    fn remove_skill_from_active_scenario_clears_wsl_and_windows_targets() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
+
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let windows_target = tmp.path().join("windows-skills");
+        let wsl_target = tmp.path().join("wsl-skills");
+        let replica_root = tmp.path().join(".skills-manager");
+        fs::create_dir_all(&windows_target).unwrap();
+        fs::create_dir_all(&wsl_target).unwrap();
+        fs::create_dir_all(&replica_root).unwrap();
+
+        // Create the skill in the central repo
+        let central_skill = central_repo::skills_dir().join("my-skill");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::write(central_skill.join("SKILL.md"), "# test").unwrap();
+
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        // Configure a Windows custom tool (all built-in tools disabled)
+        configure_single_custom_tool(&store, &windows_target);
+
+        // Configure a WSL runtime with an agent target
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "opencode",
+                        "enabled": true,
+                        "skills_dir": wsl_target.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+
+        // Insert a scenario, make it active
+        store
+            .insert_scenario(&sample_scenario("active-scenario", "Active"))
+            .unwrap();
+        store.set_active_scenario("active-scenario").unwrap();
+
+        // Insert a skill whose central_path is inside the central repo
+        store
+            .insert_skill(&sample_skill("skill-1", "my-skill", &central_skill))
+            .unwrap();
+
+        // Add skill to scenario and sync
+        store
+            .add_skill_to_scenario("active-scenario", "skill-1")
+            .unwrap();
+        sync_scenario_skills(&store, "active-scenario").unwrap();
+
+        // Verify targets exist for both tools
+        let targets_before = store.get_targets_for_skill("skill-1").unwrap();
+        assert_eq!(targets_before.len(), 2, "should have Windows + WSL target");
+
+        let windows_target_record = targets_before
+            .iter()
+            .find(|t| t.tool == "test_agent")
+            .expect("should have Windows target");
+        let wsl_target_record = targets_before
+            .iter()
+            .find(|t| t.tool == "wsl:Ubuntu:opencode")
+            .expect("should have WSL target");
+
+        // Verify the files exist on disk
+        assert!(
+            PathBuf::from(&windows_target_record.target_path).exists(),
+            "Windows target file should exist"
+        );
+        assert!(
+            PathBuf::from(&wsl_target_record.target_path).exists(),
+            "WSL target file should exist"
+        );
+
+        // Verify Library Replica has the skill
+        assert!(
+            replica_root.join("my-skill").is_dir(),
+            "Library Replica should preserve the skill"
+        );
+
+        remove_skill_from_scenario_internal(&store, "active-scenario", "skill-1").unwrap();
+
+        // Verify targets are deleted
+        let targets_after = store.get_targets_for_skill("skill-1").unwrap();
+        assert!(
+            targets_after.is_empty(),
+            "all target records should be deleted"
+        );
+
+        // Verify files are removed from disk
+        assert!(
+            !PathBuf::from(&windows_target_record.target_path).exists(),
+            "Windows target file should be removed"
+        );
+        assert!(
+            !PathBuf::from(&wsl_target_record.target_path).exists(),
+            "WSL target file should be removed"
+        );
+
+        // Verify Library Replica is preserved
+        assert!(
+            replica_root.join("my-skill/SKILL.md").exists(),
+            "Library Replica should still have the skill SKILL.md"
+        );
+
+        central_repo::set_test_base_dir_override(None);
     }
 
     #[test]

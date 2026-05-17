@@ -40,6 +40,43 @@ fn sync_skill_to_tool_internal(
     scenario_service::sync_single_skill_to_tool(store, skill_id, tool)
 }
 
+fn unsync_skill_from_tool_internal(
+    store: &SkillStore,
+    skill_id: &str,
+    tool: &str,
+) -> Result<(), AppError> {
+    let targets = store
+        .get_targets_for_skill(skill_id)
+        .map_err(AppError::db)?;
+
+    if let Some(target) = targets.iter().find(|t| t.tool == tool) {
+        let target_path = PathBuf::from(&target.target_path);
+        sync_engine::remove_target(&target_path).ok();
+    }
+
+    store.delete_target(skill_id, tool).map_err(AppError::db)?;
+
+    if let Ok(Some(active_id)) = store.get_active_scenario_id() {
+        let skill_ids = store
+            .get_skill_ids_for_scenario(&active_id)
+            .map_err(AppError::db)?;
+        if skill_ids.contains(&skill_id.to_string()) {
+            let adapter_keys: Vec<String> = tool_adapters::enabled_installed_adapters(store)
+                .iter()
+                .map(|a| a.key.clone())
+                .collect();
+            store
+                .ensure_scenario_skill_tool_defaults(&active_id, skill_id, &adapter_keys)
+                .map_err(AppError::db)?;
+            store
+                .set_scenario_skill_tool_enabled(&active_id, skill_id, tool, false)
+                .map_err(AppError::db)?;
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn sync_skill_to_tool(
     skill_id: String,
@@ -81,38 +118,7 @@ pub async fn unsync_skill_from_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let targets = store
-            .get_targets_for_skill(&skill_id)
-            .map_err(AppError::db)?;
-
-        if let Some(target) = targets.iter().find(|t| t.tool == tool) {
-            let target_path = PathBuf::from(&target.target_path);
-            sync_engine::remove_target(&target_path).ok();
-        }
-
-        store
-            .delete_target(&skill_id, &tool)
-            .map_err(AppError::db)?;
-
-        if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-            let skill_ids = store
-                .get_skill_ids_for_scenario(&active_id)
-                .map_err(AppError::db)?;
-            if skill_ids.contains(&skill_id) {
-                let adapter_keys: Vec<String> = tool_adapters::enabled_installed_adapters(&store)
-                    .iter()
-                    .map(|a| a.key.clone())
-                    .collect();
-                store
-                    .ensure_scenario_skill_tool_defaults(&active_id, &skill_id, &adapter_keys)
-                    .map_err(AppError::db)?;
-                store
-                    .set_scenario_skill_tool_enabled(&active_id, &skill_id, &tool, false)
-                    .map_err(AppError::db)?;
-            }
-        }
-
-        Ok(())
+        unsync_skill_from_tool_internal(&store, &skill_id, &tool)
     })
     .await?
 }
@@ -272,6 +278,7 @@ pub async fn sync_wsl_library_replica(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::central_repo;
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::CustomToolDef;
     use std::fs;
@@ -337,6 +344,95 @@ mod tests {
             )
             .unwrap();
         store.set_setting("sync_mode", "copy").unwrap();
+    }
+
+    #[test]
+    fn unsync_skill_from_tool_removes_wsl_target_record() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
+
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let windows_target = tmp.path().join("windows-skills");
+        let wsl_target = tmp.path().join("wsl-skills");
+        let replica_root = tmp.path().join(".skills-manager");
+        fs::create_dir_all(&windows_target).unwrap();
+        fs::create_dir_all(&wsl_target).unwrap();
+        fs::create_dir_all(&replica_root).unwrap();
+
+        // Create the skill inside the central repo
+        let central_skill = central_repo::skills_dir().join("my-skill");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::write(central_skill.join("SKILL.md"), "# test").unwrap();
+
+        store.set_setting("sync_mode", "copy").unwrap();
+        configure_single_custom_tool(&store, &windows_target);
+
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "opencode",
+                        "enabled": true,
+                        "skills_dir": wsl_target.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+
+        // Insert skill with central_path inside the repo
+        store
+            .insert_skill(&sample_skill("skill-1", "my-skill", &central_skill))
+            .unwrap();
+
+        // Sync to both tools manually
+        crate::core::scenario_service::sync_single_skill_to_tool(&store, "skill-1", "test_agent")
+            .unwrap();
+        crate::core::scenario_service::sync_single_skill_to_tool(
+            &store,
+            "skill-1",
+            "wsl:Ubuntu:opencode",
+        )
+        .unwrap();
+
+        let targets_before = store.get_targets_for_skill("skill-1").unwrap();
+        assert_eq!(targets_before.len(), 2);
+
+        let wsl_target_info = targets_before
+            .iter()
+            .find(|t| t.tool == "wsl:Ubuntu:opencode")
+            .unwrap();
+        let wsl_path = PathBuf::from(&wsl_target_info.target_path);
+
+        unsync_skill_from_tool_internal(&store, "skill-1", "wsl:Ubuntu:opencode").unwrap();
+
+        // Verify only Windows target remains
+        let targets_after = store.get_targets_for_skill("skill-1").unwrap();
+        assert_eq!(targets_after.len(), 1);
+        assert_eq!(targets_after[0].tool, "test_agent");
+
+        // Verify WSL file removed, Windows file preserved
+        assert!(!wsl_path.exists(), "WSL target should be removed from disk");
+        let windows_path = PathBuf::from(
+            &targets_after
+                .iter()
+                .find(|t| t.tool == "test_agent")
+                .unwrap()
+                .target_path,
+        );
+        assert!(windows_path.exists(), "Windows target should remain");
+
+        // Verify Library Replica is preserved
+        assert!(
+            replica_root.join("my-skill/SKILL.md").exists(),
+            "Library Replica should be preserved"
+        );
+
+        central_repo::set_test_base_dir_override(None);
     }
 
     #[test]

@@ -311,7 +311,27 @@ fn symlink_points_to(target: &Path, source: &Path) -> bool {
     }
 }
 
+/// Check whether a path is a WSL UNC path (\\wsl.localhost\Distro\...).
+fn is_wsl_unc_path(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    s.starts_with(r"\\wsl.localhost\") || s.starts_with("//wsl.localhost/")
+}
+
+/// Remove a target inside a WSL distro using `wsl.exe rm -rf`.
+/// `rm -rf` on a non-existent path succeeds with exit code 0.
+fn remove_wsl_target(target: &Path) -> Result<()> {
+    let raw = target.to_string_lossy();
+    let normalized = raw.replace('/', r"\");
+    let distro = wsl_distro_from_unc(&normalized)?;
+    let linux_path = wsl_linux_path_from_unc(&distro, &normalized)?;
+
+    run_wsl_fixed(&distro, &["rm", "-rf", &linux_path], "remove WSL target")
+}
+
 pub fn remove_target(target: &Path) -> Result<()> {
+    if is_wsl_unc_path(target) {
+        return remove_wsl_target(target);
+    }
     let metadata = match std::fs::symlink_metadata(target) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -816,5 +836,84 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("does_not_exist");
         assert!(remove_target(&path).is_ok());
+    }
+
+    // ── WSL path detection ──
+
+    #[test]
+    fn is_wsl_unc_path_matches_wsl_localhost_prefix() {
+        assert!(is_wsl_unc_path(Path::new(
+            r"\\wsl.localhost\Ubuntu\home\me\path"
+        )));
+    }
+
+    #[test]
+    fn is_wsl_unc_path_matches_forward_slash_prefix() {
+        assert!(is_wsl_unc_path(Path::new(
+            "//wsl.localhost/Ubuntu/home/me/path"
+        )));
+    }
+
+    #[test]
+    fn is_wsl_unc_path_rejects_local_paths() {
+        assert!(!is_wsl_unc_path(Path::new(r"C:\Users\me\path")));
+        assert!(!is_wsl_unc_path(Path::new("/home/me/path")));
+        assert!(!is_wsl_unc_path(Path::new("relative/path")));
+    }
+
+    #[test]
+    fn is_wsl_unc_path_rejects_other_unc_prefixes() {
+        assert!(!is_wsl_unc_path(Path::new(r"\\server\share\path")));
+    }
+
+    // ── remove_wsl_target (path parsing) ──
+
+    #[test]
+    fn wsl_distro_from_unc_extracts_distro_name() {
+        assert_eq!(
+            wsl_distro_from_unc(r"\\wsl.localhost\Ubuntu-24.04\home\me\path").unwrap(),
+            "Ubuntu-24.04"
+        );
+    }
+
+    #[test]
+    fn wsl_distro_from_unc_rejects_non_wsl_paths() {
+        assert!(wsl_distro_from_unc(r"\\server\share\path").is_err());
+    }
+
+    #[test]
+    fn wsl_linux_path_from_unc_converts_correctly() {
+        assert_eq!(
+            wsl_linux_path_from_unc(
+                "Ubuntu",
+                r"\\wsl.localhost\Ubuntu\home\me\.config\opencode\skills\grill-me"
+            )
+            .unwrap(),
+            "/home/me/.config/opencode/skills/grill-me"
+        );
+    }
+
+    #[test]
+    fn wsl_linux_path_from_unc_rejects_mismatched_distro() {
+        assert!(wsl_linux_path_from_unc("Ubuntu", r"\\wsl.localhost\Debian\home\me\path").is_err());
+    }
+
+    // ── remove_target for WSL UNC paths ──
+
+    #[test]
+    fn remove_target_wsl_path_detection_dispatches_correctly() {
+        // The function should detect the WSL UNC path and attempt wsl.exe removal.
+        // Since this test doesn't have WSL, it should return an Err containing
+        // "wsl.exe" or "Failed to start" in the error message.
+        let invalid = Path::new(r"\\wsl.localhost\NonexistentDistro\path\to\skill");
+        let result = remove_target(invalid);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("wsl.exe")
+                || err.contains("Failed to start")
+                || err.contains("remove WSL target"),
+            "expected wsl.exe error, got: {err}"
+        );
     }
 }
