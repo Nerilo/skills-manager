@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.19.2] - 2026-05-16
+## [1.19.3] - 2026-05-17
+
+### Added
+- **Report Issue button (Settings → About)** — one click copies app version, OS, enabled agents, UI language, and a smart excerpt of recent logs to the clipboard, then opens a pre-filled GitHub issue template so you just paste and submit.
+- **Export Logs button (Settings → About)** — bundles the most recent log files (with sensitive paths and tokens sanitized) into a zip in your Downloads folder and reveals it in your file manager so you can drag it straight into an issue.
+- **Crash banner on next launch** — if the previous session crashed, Settings → About now shows a red banner with a one-click report button so unexpected exits don't go unnoticed.
+- **GitHub issue templates** — bug reports and feature requests now have lightweight bilingual templates that guide you to use the buttons above.
+
+### Changed
+- **Production builds now write a log file** (Info level, 5 MB × 3 rotation). User home paths, git credentials, tokens, and email addresses are sanitized before anything is exported or copied. Repeated noisy lines are collapsed so important events stay visible.
+
+### Fixed
+- **Runaway git-fetch loop that pinned CPU at 100%+ and could freeze the window** — a self-driving fetch loop (refresh → fetch → file-watcher → refresh) has been cut; on some macOS setups this also presented as the skill preview going black and only `⌘Q` being able to close the app (#144, #69, #151, #150).
+- **Tray icon visible on Windows / Linux** — the previous all-white tray icon disappeared on light Windows taskbars; non-macOS platforms now use a colored variant while macOS keeps the template-style white icon (#154, #149).
+
+
 
 ### Fixed
 - **Codex skills now use the official `~/.agents/skills` location** — Codex reads user-level skills only from `~/.agents/skills` per its official docs, but skills-manager was deploying to `~/.codex/skills` (which Codex never reads) and not scanning `~/.agents/skills`. Both deployment target and discovery are now corrected; skills already at the old `~/.codex/skills` remain visible for backward compatibility (#143, #147).
