@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Refuse to copy when `dst` would land inside `src` (or equal `src`).
 /// Otherwise the recursive copy walks into the freshly-created `dst` and
@@ -28,6 +29,7 @@ pub(crate) fn ensure_dst_not_inside_src(src: &Path, dst: &Path) -> Result<()> {
 #[derive(Debug, Clone, Copy)]
 pub enum SyncMode {
     Symlink,
+    WslSymlink,
     Copy,
 }
 
@@ -35,15 +37,18 @@ impl SyncMode {
     pub fn as_str(&self) -> &'static str {
         match self {
             SyncMode::Symlink => "symlink",
+            SyncMode::WslSymlink => "symlink",
             SyncMode::Copy => "copy",
         }
     }
 }
 
-pub fn sync_mode_for_tool(_tool_key: &str, configured_mode: Option<&str>) -> SyncMode {
+pub fn sync_mode_for_tool(tool_key: &str, configured_mode: Option<&str>) -> SyncMode {
     match configured_mode {
         Some("copy") => SyncMode::Copy,
+        Some("symlink") if tool_key.starts_with("wsl:") => SyncMode::WslSymlink,
         Some("symlink") => SyncMode::Symlink,
+        _ if tool_key.starts_with("wsl:") => SyncMode::WslSymlink,
         _ => SyncMode::Symlink,
     }
 }
@@ -61,6 +66,12 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
     if is_target_current(source, target, mode) {
         return Ok(mode);
     }
+
+    let wsl_link = if matches!(mode, SyncMode::WslSymlink) {
+        Some(prepare_wsl_symlink(source, target)?)
+    } else {
+        None
+    };
 
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
@@ -104,11 +115,127 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
                 Ok(SyncMode::Copy)
             }
         }
+        SyncMode::WslSymlink => {
+            let wsl_link = wsl_link.expect("WSL symlink command should be prepared");
+            create_wsl_symlink(&wsl_link)?;
+            Ok(SyncMode::WslSymlink)
+        }
         SyncMode::Copy => {
             copy_dir_recursive(source, target)?;
             Ok(SyncMode::Copy)
         }
     }
+}
+
+#[derive(Debug)]
+struct WslSymlinkCommand {
+    distro_name: String,
+    source: String,
+    target: String,
+    target_parent: String,
+}
+
+fn prepare_wsl_symlink(source: &Path, target: &Path) -> Result<WslSymlinkCommand> {
+    let source_raw = source.to_string_lossy();
+    let target_raw = target.to_string_lossy();
+    let source_distro = wsl_distro_from_unc(&source_raw)?;
+    let target_distro = wsl_distro_from_unc(&target_raw)?;
+    if !source_distro.eq_ignore_ascii_case(&target_distro) {
+        anyhow::bail!(
+            "WSL symlink mode requires source and target to be inside the same WSL distro"
+        );
+    }
+    let source = wsl_linux_path_from_unc(&source_distro, &source_raw)?;
+    let target = wsl_linux_path_from_unc(&source_distro, &target_raw)?;
+    let target_parent = target
+        .rsplit_once('/')
+        .map(|(parent, _)| {
+            if parent.is_empty() {
+                "/".to_string()
+            } else {
+                parent.to_string()
+            }
+        })
+        .unwrap_or_else(|| "/".to_string());
+
+    Ok(WslSymlinkCommand {
+        distro_name: source_distro,
+        source,
+        target,
+        target_parent,
+    })
+}
+
+fn create_wsl_symlink(link: &WslSymlinkCommand) -> Result<()> {
+    run_wsl_fixed(
+        &link.distro_name,
+        &["mkdir", "-p", link.target_parent.as_str()],
+        "create WSL target parent directory",
+    )?;
+    run_wsl_fixed(
+        &link.distro_name,
+        &["ln", "-s", link.source.as_str(), link.target.as_str()],
+        "create WSL symlink",
+    )
+}
+
+fn run_wsl_fixed(distro_name: &str, command_args: &[&str], action: &str) -> Result<()> {
+    let output = Command::new("wsl.exe")
+        .arg("-d")
+        .arg(distro_name)
+        .arg("--")
+        .args(command_args)
+        .output()
+        .with_context(|| format!("Failed to start wsl.exe to {action}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    anyhow::bail!(
+        "Failed to {action} in WSL distro {distro_name}: {}{}",
+        stderr.trim(),
+        stdout.trim()
+    )
+}
+
+fn wsl_distro_from_unc(path: &str) -> Result<String> {
+    let normalized = path.replace('/', r"\");
+    let prefix = r"\\wsl.localhost\";
+    let Some(rest) = normalized.strip_prefix(prefix) else {
+        anyhow::bail!(
+            "WSL symlink mode requires \\\\wsl.localhost\\Distro\\... paths for both source and target"
+        );
+    };
+    let Some((distro_name, _)) = rest.split_once('\\') else {
+        anyhow::bail!("WSL symlink mode requires a path inside a configured WSL distro");
+    };
+    if distro_name.trim().is_empty() {
+        anyhow::bail!("WSL symlink mode requires a WSL distro name");
+    }
+    Ok(distro_name.to_string())
+}
+
+fn wsl_linux_path_from_unc(distro_name: &str, path: &str) -> Result<String> {
+    let normalized = path.replace('/', r"\");
+    let prefix = r"\\wsl.localhost\";
+    let Some(rest) = normalized.strip_prefix(prefix) else {
+        anyhow::bail!(
+            "WSL symlink mode requires \\\\wsl.localhost\\Distro\\... paths for both source and target"
+        );
+    };
+    let Some((path_distro, linux_path)) = rest.split_once('\\') else {
+        anyhow::bail!("WSL symlink mode requires a path inside a configured WSL distro");
+    };
+    if !path_distro.eq_ignore_ascii_case(distro_name) {
+        anyhow::bail!("WSL symlink mode requires source and target paths in the same WSL distro");
+    }
+    let linux_path = linux_path.trim_matches('\\').replace('\\', "/");
+    if linux_path.is_empty() {
+        anyhow::bail!("WSL symlink mode requires a path inside the distro");
+    }
+    Ok(format!("/{linux_path}"))
 }
 
 pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> Result<()> {
@@ -138,7 +265,7 @@ fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
 
 pub fn is_target_current(source: &Path, target: &Path, mode: SyncMode) -> bool {
     match mode {
-        SyncMode::Symlink => symlink_points_to(target, source),
+        SyncMode::Symlink | SyncMode::WslSymlink => symlink_points_to(target, source),
         // Copy mode intentionally refreshes the target because there is no cheap
         // metadata-backed freshness check for arbitrary skill directory contents.
         SyncMode::Copy => false,
@@ -275,9 +402,59 @@ mod tests {
     }
 
     #[test]
+    fn sync_mode_uses_wsl_symlink_for_configured_wsl_targets() {
+        assert!(matches!(
+            sync_mode_for_tool("wsl:Ubuntu:codex", Some("symlink")),
+            SyncMode::WslSymlink
+        ));
+    }
+
+    #[test]
+    fn sync_mode_keeps_copy_for_wsl_targets_when_configured() {
+        assert!(matches!(
+            sync_mode_for_tool("wsl:Ubuntu:codex", Some("copy")),
+            SyncMode::Copy
+        ));
+    }
+
+    #[test]
     fn sync_mode_as_str() {
         assert_eq!(SyncMode::Symlink.as_str(), "symlink");
+        assert_eq!(SyncMode::WslSymlink.as_str(), "symlink");
         assert_eq!(SyncMode::Copy.as_str(), "copy");
+    }
+
+    #[test]
+    fn wsl_linux_path_from_unc_accepts_same_distro_unc_path() {
+        assert_eq!(
+            wsl_linux_path_from_unc("Ubuntu", r"\\wsl.localhost\Ubuntu\home\me\.skills-manager")
+                .unwrap(),
+            "/home/me/.skills-manager"
+        );
+    }
+
+    #[test]
+    fn wsl_linux_path_from_unc_rejects_other_distros() {
+        let err = wsl_linux_path_from_unc("Ubuntu", r"\\wsl.localhost\Debian\home\me\skills")
+            .unwrap_err();
+
+        assert!(err.to_string().contains("same WSL distro"), "{err}");
+    }
+
+    #[test]
+    fn sync_skill_wsl_symlink_rejects_unsupported_paths_without_removing_target() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("source");
+        let tgt = tmp.path().join("target");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&tgt).unwrap();
+        fs::write(src.join("SKILL.md"), "# source").unwrap();
+        fs::write(tgt.join("keep.txt"), "keep").unwrap();
+
+        let err = sync_skill(&src, &tgt, SyncMode::WslSymlink).unwrap_err();
+
+        assert!(err.to_string().contains("WSL symlink mode"), "{err}");
+        assert_eq!(fs::read_to_string(tgt.join("keep.txt")).unwrap(), "keep");
     }
 
     #[test]
@@ -571,7 +748,10 @@ mod tests {
         fs::create_dir_all(&real).unwrap();
         fs::write(real.join("SKILL.md"), "# hello").unwrap();
         let link = tmp.path().join("link");
-        std::os::windows::fs::symlink_dir(&real, &link).unwrap();
+        if let Err(err) = std::os::windows::fs::symlink_dir(&real, &link) {
+            eprintln!("skipping directory symlink removal test: {err}");
+            return;
+        }
 
         remove_target(&link).unwrap();
         assert!(!link.exists());
