@@ -259,9 +259,10 @@ pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> R
     }
 
     ensure_dst_not_inside_src(primary_library, library_replica)?;
-    ensure_library_replica_ownership(library_replica)?;
-    remove_target(library_replica)
-        .with_context(|| format!("Failed to remove existing target {:?}", library_replica))?;
+    if library_replica_requires_rebuild(library_replica)? {
+        remove_target(library_replica)
+            .with_context(|| format!("Failed to remove existing target {:?}", library_replica))?;
+    }
     copy_dir_recursive(primary_library, library_replica)?;
     std::fs::write(
         library_replica.join(REPLICA_OWNERSHIP_MARKER),
@@ -302,22 +303,56 @@ fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_library_replica_ownership(library_replica: &Path) -> Result<()> {
+fn library_replica_requires_rebuild(library_replica: &Path) -> Result<bool> {
     if !library_replica.exists() {
-        return Ok(());
+        return library_replica_requires_rebuild_from_state(
+            library_replica,
+            false,
+            false,
+            false,
+            false,
+        );
     }
     if !library_replica.is_dir() {
+        return library_replica_requires_rebuild_from_state(
+            library_replica,
+            true,
+            false,
+            false,
+            false,
+        );
+    }
+    let has_marker = library_replica.join(REPLICA_OWNERSHIP_MARKER).is_file();
+    let is_empty = if has_marker {
+        false
+    } else {
+        std::fs::read_dir(library_replica)
+            .with_context(|| format!("Failed to inspect Library Replica {:?}", library_replica))?
+            .next()
+            .is_none()
+    };
+
+    library_replica_requires_rebuild_from_state(library_replica, true, true, has_marker, is_empty)
+}
+
+fn library_replica_requires_rebuild_from_state(
+    library_replica: &Path,
+    exists: bool,
+    is_dir: bool,
+    has_marker: bool,
+    is_empty: bool,
+) -> Result<bool> {
+    if !exists {
+        return Ok(false);
+    }
+    if !is_dir {
         anyhow::bail!("Library Replica target must be a directory");
     }
-    if library_replica.join(REPLICA_OWNERSHIP_MARKER).is_file() {
-        return Ok(());
+    if has_marker {
+        return Ok(true);
     }
-    let is_empty = std::fs::read_dir(library_replica)
-        .with_context(|| format!("Failed to inspect Library Replica {:?}", library_replica))?
-        .next()
-        .is_none();
     if is_empty {
-        return Ok(());
+        return Ok(false);
     }
     anyhow::bail!(
         "Library Replica target {:?} is missing ownership marker; refusing to delete it",
@@ -843,6 +878,42 @@ mod tests {
     }
 
     #[test]
+    fn sync_library_replica_missing_first_sync_succeeds() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = tmp.path().join("home").join("me").join(".skills-manager");
+        fs::create_dir_all(primary.join("hello")).unwrap();
+        fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
+
+        assert!(!replica.exists());
+        sync_library_replica(&primary, &replica).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(replica.join("hello/SKILL.md")).unwrap(),
+            "# primary"
+        );
+        assert!(replica.join(REPLICA_OWNERSHIP_MARKER).is_file());
+    }
+
+    #[test]
+    fn sync_library_replica_empty_unmarked_first_sync_succeeds() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = tmp.path().join("home").join("me").join(".skills-manager");
+        fs::create_dir_all(primary.join("hello")).unwrap();
+        fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
+        fs::create_dir_all(&replica).unwrap();
+
+        sync_library_replica(&primary, &replica).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(replica.join("hello/SKILL.md")).unwrap(),
+            "# primary"
+        );
+        assert!(replica.join(REPLICA_OWNERSHIP_MARKER).is_file());
+    }
+
+    #[test]
     fn sync_library_replica_skips_internal_metadata_dir() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
@@ -929,6 +1000,44 @@ mod tests {
         let err = sync_library_replica(&primary, replica).unwrap_err();
 
         assert!(err.to_string().contains(".skills-manager"), "{err}");
+    }
+
+    #[test]
+    fn wsl_unc_missing_library_replica_does_not_require_delete_before_first_sync() {
+        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
+
+        assert!(
+            !library_replica_requires_rebuild_from_state(replica, false, false, false, false)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn wsl_unc_empty_unmarked_library_replica_does_not_require_delete_before_first_sync() {
+        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
+
+        assert!(
+            !library_replica_requires_rebuild_from_state(replica, true, true, false, true).unwrap()
+        );
+    }
+
+    #[test]
+    fn wsl_unc_non_empty_unmarked_library_replica_refuses_delete() {
+        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
+
+        let err = library_replica_requires_rebuild_from_state(replica, true, true, false, false)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("ownership marker"), "{err}");
+    }
+
+    #[test]
+    fn wsl_unc_marked_library_replica_can_be_refreshed() {
+        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
+
+        assert!(
+            library_replica_requires_rebuild_from_state(replica, true, true, true, false).unwrap()
+        );
     }
 
     // ── remove_target ──
