@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use super::process;
 
 const REPLICA_OWNERSHIP_MARKER: &str = ".skills-manager-owner";
+const UNMARKED_REPLICA_BACKUP_SUFFIX: &str = ".unmarked-backup";
 
 /// Refuse to copy when `dst` would land inside `src` (or equal `src`).
 /// Otherwise the recursive copy walks into the freshly-created `dst` and
@@ -259,9 +260,16 @@ pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> R
     }
 
     ensure_dst_not_inside_src(primary_library, library_replica)?;
-    if library_replica_requires_rebuild(library_replica)? {
-        remove_target(library_replica)
-            .with_context(|| format!("Failed to remove existing target {:?}", library_replica))?;
+    match library_replica_refresh_action(library_replica)? {
+        LibraryReplicaRefreshAction::CopyIntoPlace => {}
+        LibraryReplicaRefreshAction::Rebuild => {
+            remove_target(library_replica).with_context(|| {
+                format!("Failed to remove existing target {:?}", library_replica)
+            })?;
+        }
+        LibraryReplicaRefreshAction::QuarantineUnmarked => {
+            quarantine_unmarked_library_replica(library_replica)?;
+        }
     }
     copy_dir_recursive(primary_library, library_replica)?;
     std::fs::write(
@@ -303,9 +311,16 @@ fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
     Ok(())
 }
 
-fn library_replica_requires_rebuild(library_replica: &Path) -> Result<bool> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LibraryReplicaRefreshAction {
+    CopyIntoPlace,
+    Rebuild,
+    QuarantineUnmarked,
+}
+
+fn library_replica_refresh_action(library_replica: &Path) -> Result<LibraryReplicaRefreshAction> {
     if !library_replica.exists() {
-        return library_replica_requires_rebuild_from_state(
+        return library_replica_refresh_action_from_state(
             library_replica,
             false,
             false,
@@ -314,7 +329,7 @@ fn library_replica_requires_rebuild(library_replica: &Path) -> Result<bool> {
         );
     }
     if !library_replica.is_dir() {
-        return library_replica_requires_rebuild_from_state(
+        return library_replica_refresh_action_from_state(
             library_replica,
             true,
             false,
@@ -332,32 +347,69 @@ fn library_replica_requires_rebuild(library_replica: &Path) -> Result<bool> {
             .is_none()
     };
 
-    library_replica_requires_rebuild_from_state(library_replica, true, true, has_marker, is_empty)
+    library_replica_refresh_action_from_state(library_replica, true, true, has_marker, is_empty)
 }
 
-fn library_replica_requires_rebuild_from_state(
-    library_replica: &Path,
+fn library_replica_refresh_action_from_state(
+    _library_replica: &Path,
     exists: bool,
     is_dir: bool,
     has_marker: bool,
     is_empty: bool,
-) -> Result<bool> {
+) -> Result<LibraryReplicaRefreshAction> {
     if !exists {
-        return Ok(false);
+        return Ok(LibraryReplicaRefreshAction::CopyIntoPlace);
     }
     if !is_dir {
         anyhow::bail!("Library Replica target must be a directory");
     }
     if has_marker {
-        return Ok(true);
+        return Ok(LibraryReplicaRefreshAction::Rebuild);
     }
     if is_empty {
-        return Ok(false);
+        return Ok(LibraryReplicaRefreshAction::CopyIntoPlace);
     }
-    anyhow::bail!(
-        "Library Replica target {:?} is missing ownership marker; refusing to delete it",
-        library_replica
-    )
+    Ok(LibraryReplicaRefreshAction::QuarantineUnmarked)
+}
+
+fn quarantine_unmarked_library_replica(library_replica: &Path) -> Result<()> {
+    let backup = next_unmarked_replica_backup_path(library_replica)?;
+    std::fs::rename(library_replica, &backup).with_context(|| {
+        format!(
+            "Library Replica target {:?} is missing ownership marker; failed to move it to backup {:?}",
+            library_replica, backup
+        )
+    })
+}
+
+fn next_unmarked_replica_backup_path(library_replica: &Path) -> Result<PathBuf> {
+    let parent = library_replica.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Library Replica target {:?} must include a parent directory",
+            library_replica
+        )
+    })?;
+    let name = library_replica
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Library Replica target {:?} must have a valid directory name",
+                library_replica
+            )
+        })?;
+    let base_name = format!("{name}{UNMARKED_REPLICA_BACKUP_SUFFIX}");
+    let first = parent.join(&base_name);
+    if !first.exists() {
+        return Ok(first);
+    }
+    for index in 1.. {
+        let candidate = parent.join(format!("{base_name}-{index}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("unbounded backup suffix search should always return")
 }
 
 pub fn is_target_current(source: &Path, target: &Path, mode: SyncMode) -> bool {
@@ -937,20 +989,28 @@ mod tests {
     }
 
     #[test]
-    fn sync_library_replica_refuses_to_delete_existing_unmarked_replica() {
+    fn sync_library_replica_quarantines_existing_unmarked_replica() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
         let replica = tmp.path().join("runtime").join(".skills-manager");
+        let backup = tmp
+            .path()
+            .join("runtime")
+            .join(".skills-manager.unmarked-backup");
         fs::create_dir_all(&primary).unwrap();
         fs::write(primary.join("SKILL.md"), "# primary").unwrap();
         fs::create_dir_all(&replica).unwrap();
         fs::write(replica.join("user-file.txt"), "keep").unwrap();
 
-        let err = sync_library_replica(&primary, &replica).unwrap_err();
+        sync_library_replica(&primary, &replica).unwrap();
 
-        assert!(err.to_string().contains("ownership marker"), "{err}");
         assert_eq!(
-            fs::read_to_string(replica.join("user-file.txt")).unwrap(),
+            fs::read_to_string(replica.join("SKILL.md")).unwrap(),
+            "# primary"
+        );
+        assert!(replica.join(REPLICA_OWNERSHIP_MARKER).is_file());
+        assert_eq!(
+            fs::read_to_string(backup.join("user-file.txt")).unwrap(),
             "keep"
         );
     }
@@ -1006,9 +1066,9 @@ mod tests {
     fn wsl_unc_missing_library_replica_does_not_require_delete_before_first_sync() {
         let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
 
-        assert!(
-            !library_replica_requires_rebuild_from_state(replica, false, false, false, false)
-                .unwrap()
+        assert_eq!(
+            library_replica_refresh_action_from_state(replica, false, false, false, false).unwrap(),
+            LibraryReplicaRefreshAction::CopyIntoPlace
         );
     }
 
@@ -1016,27 +1076,29 @@ mod tests {
     fn wsl_unc_empty_unmarked_library_replica_does_not_require_delete_before_first_sync() {
         let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
 
-        assert!(
-            !library_replica_requires_rebuild_from_state(replica, true, true, false, true).unwrap()
+        assert_eq!(
+            library_replica_refresh_action_from_state(replica, true, true, false, true).unwrap(),
+            LibraryReplicaRefreshAction::CopyIntoPlace
         );
     }
 
     #[test]
-    fn wsl_unc_non_empty_unmarked_library_replica_refuses_delete() {
+    fn wsl_unc_non_empty_unmarked_library_replica_is_quarantined() {
         let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
 
-        let err = library_replica_requires_rebuild_from_state(replica, true, true, false, false)
-            .unwrap_err();
-
-        assert!(err.to_string().contains("ownership marker"), "{err}");
+        assert_eq!(
+            library_replica_refresh_action_from_state(replica, true, true, false, false).unwrap(),
+            LibraryReplicaRefreshAction::QuarantineUnmarked
+        );
     }
 
     #[test]
     fn wsl_unc_marked_library_replica_can_be_refreshed() {
         let replica = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.skills-manager");
 
-        assert!(
-            library_replica_requires_rebuild_from_state(replica, true, true, true, false).unwrap()
+        assert_eq!(
+            library_replica_refresh_action_from_state(replica, true, true, true, false).unwrap(),
+            LibraryReplicaRefreshAction::Rebuild
         );
     }
 

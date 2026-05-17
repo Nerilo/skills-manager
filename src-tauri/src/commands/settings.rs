@@ -658,7 +658,7 @@ fn reveal_in_file_manager(path: &std::path::Path) {
 }
 
 #[cfg(test)]
-mod tests {
+mod log_export_tests {
     use super::*;
 
     #[test]
