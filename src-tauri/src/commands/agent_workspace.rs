@@ -9,7 +9,8 @@ use crate::commands::projects::{
 };
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
-    error::AppError, installer, process, project_scanner, sync_engine, tool_adapters,
+    central_repo, error::AppError, installer, process, project_scanner, skill_distribution,
+    sync_engine, tool_adapters, wsl_runtime,
 };
 
 fn adapter_for_agent(
@@ -381,9 +382,27 @@ fn update_agent_local_skill_from_center(
     let target_path = PathBuf::from(&skill.path);
     ensure_agent_skill_path(&target_path, &skills_root)?;
 
-    let source = PathBuf::from(&managed.central_path);
-    sync_engine::sync_skill(&source, &target_path, sync_engine::SyncMode::Copy)
-        .map_err(AppError::io)?;
+    let (source, mode) =
+        if let Some((distro_name, _agent_key)) = wsl_runtime::parse_wsl_tool_key(agent) {
+            let runtime = wsl_runtime::get_runtime_environment(store, distro_name)
+                .map_err(|err| AppError::invalid_input(err.to_string()))?;
+            sync_engine::sync_library_replica(
+                &central_repo::skills_dir(),
+                Path::new(&runtime.library_replica_path),
+            )
+            .map_err(|err| AppError::io(format!("Failed to sync WSL Library Replica: {err}")))?;
+            let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+            (
+                skill_distribution::source_for_target(store, managed, agent)?,
+                sync_engine::sync_mode_for_tool(agent, configured_mode.as_deref()),
+            )
+        } else {
+            (
+                PathBuf::from(&managed.central_path),
+                sync_engine::SyncMode::Copy,
+            )
+        };
+    sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
     Ok(())
 }
 
@@ -395,7 +414,7 @@ mod tests {
     };
     use crate::core::content_hash;
     use crate::core::project_scanner::ProjectSkillInfo;
-    use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillStore};
+    use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillStore, SkillTargetRecord};
     use crate::core::{central_repo, installer, tool_adapters};
     use std::collections::HashMap;
 
@@ -590,6 +609,104 @@ mod tests {
                 .unwrap();
         assert!(original_content.contains("Center copy"));
         assert!(skills.iter().any(|skill| skill.name == "local-tool-2"));
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn updating_wsl_agent_local_skill_refreshes_library_replica() {
+        let _guard = central_repo::test_base_dir_lock();
+        let temp = tempfile::tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(temp.path().join("center")));
+
+        let db_path = temp.path().join("store.db");
+        let store = SkillStore::new(&db_path).unwrap();
+
+        let central_skill = central_repo::skills_dir().join("demo-skill");
+        let replica_root = temp.path().join("wsl-replica");
+        let replica_skill = replica_root.join("demo-skill");
+        let wsl_skills_root = temp.path().join("wsl-agent-skills");
+        let target_skill = wsl_skills_root.join("demo-skill");
+        std::fs::create_dir_all(&central_skill).unwrap();
+        std::fs::create_dir_all(&replica_skill).unwrap();
+        std::fs::create_dir_all(&target_skill).unwrap();
+        std::fs::write(
+            central_skill.join("SKILL.md"),
+            "---\nname: demo-skill\n---\ncenter\n",
+        )
+        .unwrap();
+        std::fs::write(
+            replica_skill.join("SKILL.md"),
+            "---\nname: demo-skill\n---\nstale replica\n",
+        )
+        .unwrap();
+        std::fs::write(
+            target_skill.join("SKILL.md"),
+            "---\nname: demo-skill\n---\nstale target\n",
+        )
+        .unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        store
+            .insert_skill(&SkillRecord {
+                id: "center-id".to_string(),
+                name: "demo-skill".to_string(),
+                description: None,
+                source_type: "local".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: central_skill.to_string_lossy().to_string(),
+                content_hash: content_hash::hash_directory(&central_skill).ok(),
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: Some(now),
+                last_check_error: None,
+            })
+            .unwrap();
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "target-id".to_string(),
+                skill_id: "center-id".to_string(),
+                tool: "wsl:Ubuntu:codex".to_string(),
+                target_path: target_skill.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(now),
+                last_error: None,
+            })
+            .unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "codex",
+                        "enabled": true,
+                        "skills_dir": wsl_skills_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        update_agent_local_skill_from_center(&store, "wsl:Ubuntu:codex", "demo-skill").unwrap();
+
+        assert!(std::fs::read_to_string(replica_skill.join("SKILL.md"))
+            .unwrap()
+            .contains("center"));
+        assert!(std::fs::read_to_string(target_skill.join("SKILL.md"))
+            .unwrap()
+            .contains("center"));
 
         central_repo::set_test_base_dir_override(None);
     }

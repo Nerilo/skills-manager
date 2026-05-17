@@ -483,7 +483,7 @@ export function Settings() {
     setSavingWslRuntime(true);
     try {
       await api.addWslRuntimeEnvironment(wslDistroName, wslLibraryReplicaPath);
-      await refreshWslRuntimes();
+      await Promise.all([refreshWslRuntimes(), refreshTools()]);
       setWslDistroName("");
       setWslLibraryReplicaPath("");
       toast.success(t("settings.wslRuntimeSaved"));
@@ -498,7 +498,7 @@ export function Settings() {
     setRemovingWslRuntime(distroName);
     try {
       await api.removeWslRuntimeEnvironment(distroName);
-      await refreshWslRuntimes();
+      await Promise.all([refreshWslRuntimes(), refreshTools()]);
       toast.success(t("settings.wslRuntimeRemoved"));
     } catch (error) {
       toast.error(getErrorMessage(error, t("common.error")));

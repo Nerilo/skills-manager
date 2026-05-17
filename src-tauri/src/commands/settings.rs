@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::core::{
-    central_repo, error::AppError, skill_store::SkillStore, skillssh_api, wsl_runtime,
+    central_repo, error::AppError, skill_store::SkillStore, skillssh_api, sync_engine, wsl_runtime,
 };
 
 #[derive(serde::Serialize)]
@@ -139,10 +139,33 @@ pub async fn remove_wsl_runtime_environment(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        wsl_runtime::remove_runtime_environment(&store, &distro_name)
-            .map_err(|err| AppError::invalid_input(err.to_string()))
+        remove_wsl_runtime_environment_internal(&store, &distro_name)
     })
     .await?
+}
+
+fn remove_wsl_runtime_environment_internal(
+    store: &SkillStore,
+    distro_name: &str,
+) -> Result<(), AppError> {
+    let targets = store.get_all_targets().map_err(AppError::db)?;
+    for target in targets {
+        let Some((target_distro, _agent_key)) = wsl_runtime::parse_wsl_tool_key(&target.tool)
+        else {
+            continue;
+        };
+        if !target_distro.eq_ignore_ascii_case(distro_name) {
+            continue;
+        }
+
+        sync_engine::remove_target(std::path::Path::new(&target.target_path)).ok();
+        store
+            .delete_target(&target.skill_id, &target.tool)
+            .map_err(AppError::db)?;
+    }
+
+    wsl_runtime::remove_runtime_environment(store, distro_name)
+        .map_err(|err| AppError::invalid_input(err.to_string()))
 }
 
 #[tauri::command]
@@ -277,4 +300,105 @@ fn version_gt(a: &str, b: &str) -> bool {
     // Fallback for non-SemVer tags.
     let parse = |s: &str| -> Vec<u64> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
     parse(a) > parse(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_wsl_runtime_environment_internal;
+    use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
+
+    fn sample_skill(central_path: &std::path::Path) -> SkillRecord {
+        SkillRecord {
+            id: "skill-1".to_string(),
+            name: "demo-skill".to_string(),
+            description: None,
+            source_type: "local".to_string(),
+            source_ref: None,
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: None,
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        }
+    }
+
+    fn sample_target(tool: &str, path: &std::path::Path) -> SkillTargetRecord {
+        SkillTargetRecord {
+            id: format!("target-{tool}"),
+            skill_id: "skill-1".to_string(),
+            tool: tool.to_string(),
+            target_path: path.to_string_lossy().to_string(),
+            mode: "copy".to_string(),
+            status: "ok".to_string(),
+            synced_at: Some(1),
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn removing_wsl_runtime_unsyncs_matching_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("settings.db")).unwrap();
+        let central = tmp.path().join("center").join("demo-skill");
+        let ubuntu_target = tmp.path().join("ubuntu-target");
+        let debian_target = tmp.path().join("debian-target");
+        let windows_target = tmp.path().join("windows-target");
+        std::fs::create_dir_all(&central).unwrap();
+        std::fs::create_dir_all(&ubuntu_target).unwrap();
+        std::fs::create_dir_all(&debian_target).unwrap();
+        std::fs::create_dir_all(&windows_target).unwrap();
+        std::fs::write(central.join("SKILL.md"), "# demo").unwrap();
+
+        store.insert_skill(&sample_skill(&central)).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([
+                    {
+                        "distro_name": "Ubuntu",
+                        "library_replica_path": tmp.path().join("ubuntu-replica").to_string_lossy(),
+                        "agent_targets": [{ "key": "codex", "enabled": true, "skills_dir": ubuntu_target.to_string_lossy() }]
+                    },
+                    {
+                        "distro_name": "Debian",
+                        "library_replica_path": tmp.path().join("debian-replica").to_string_lossy(),
+                        "agent_targets": [{ "key": "codex", "enabled": true, "skills_dir": debian_target.to_string_lossy() }]
+                    }
+                ])
+                .to_string(),
+            )
+            .unwrap();
+        store
+            .insert_target(&sample_target("wsl:Ubuntu:codex", &ubuntu_target))
+            .unwrap();
+        store
+            .insert_target(&sample_target("wsl:Debian:codex", &debian_target))
+            .unwrap();
+        store
+            .insert_target(&sample_target("codex", &windows_target))
+            .unwrap();
+
+        remove_wsl_runtime_environment_internal(&store, "Ubuntu").unwrap();
+
+        let targets = store.get_all_targets().unwrap();
+        assert!(!targets
+            .iter()
+            .any(|target| target.tool == "wsl:Ubuntu:codex"));
+        assert!(targets
+            .iter()
+            .any(|target| target.tool == "wsl:Debian:codex"));
+        assert!(targets.iter().any(|target| target.tool == "codex"));
+        assert!(!ubuntu_target.exists());
+        assert!(debian_target.exists());
+        assert!(windows_target.exists());
+    }
 }
