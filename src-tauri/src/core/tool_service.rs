@@ -321,3 +321,62 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn list_tool_info_keeps_windows_targets_without_wsl_configuration() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("tools.db")).unwrap();
+
+        let tools = list_tool_info(&store);
+
+        assert!(tools.iter().any(|tool| tool.key == "codex"));
+        assert!(tools
+            .iter()
+            .all(|tool| tool.runtime_environment == "windows"));
+        assert!(tools.iter().all(|tool| tool.wsl_distro_name.is_none()));
+        assert!(!tools.iter().any(|tool| tool.key.starts_with("wsl:")));
+    }
+
+    #[test]
+    fn list_tool_info_exposes_wsl_targets_separately_from_windows_targets() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-tools.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                r#"{"codex":"C:\\Users\\me\\codex-skills"}"#,
+            )
+            .unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                r#"[{"distro_name":"Ubuntu","library_replica_path":"\\\\wsl.localhost\\Ubuntu\\home\\me\\.skills-manager","agent_targets":[{"key":"codex","enabled":true}]}]"#,
+            )
+            .unwrap();
+
+        let tools = list_tool_info(&store);
+        let windows_codex = tools
+            .iter()
+            .find(|tool| tool.key == "codex")
+            .expect("Windows Codex target should remain listable");
+        let wsl_codex = tools
+            .iter()
+            .find(|tool| tool.key == "wsl:Ubuntu:codex")
+            .expect("WSL Codex target should be listable");
+
+        assert_eq!(windows_codex.runtime_environment, "windows");
+        assert_eq!(windows_codex.wsl_distro_name, None);
+        assert_eq!(windows_codex.skills_dir, r"C:\Users\me\codex-skills");
+        assert_eq!(wsl_codex.runtime_environment, "wsl");
+        assert_eq!(wsl_codex.wsl_distro_name.as_deref(), Some("Ubuntu"));
+        assert_eq!(
+            wsl_codex.skills_dir,
+            r"\\wsl.localhost\Ubuntu\home\me\.agents\skills"
+        );
+    }
+}

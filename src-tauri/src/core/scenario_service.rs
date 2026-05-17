@@ -6,7 +6,7 @@ use super::{
     error::AppError,
     skill_distribution,
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
-    sync_engine, tool_adapters, tool_service,
+    sync_engine, tool_adapters, tool_service, wsl_runtime,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +26,8 @@ pub struct SyncPreviewTarget {
     pub tool: String,
     pub target_path: String,
     pub mode: String,
+    pub runtime_environment: String,
+    pub wsl_distro_name: Option<String>,
 }
 
 pub fn ensure_scenario_exists(store: &SkillStore, scenario_id: &str) -> Result<(), AppError> {
@@ -104,6 +106,11 @@ pub fn preview_scenario_sync(
         targets
             .into_iter()
             .map(|target| SyncPreviewTarget {
+                runtime_environment: wsl_runtime::parse_wsl_tool_key(&target.tool)
+                    .map(|_| "wsl".to_string())
+                    .unwrap_or_else(|| "windows".to_string()),
+                wsl_distro_name: wsl_runtime::parse_wsl_tool_key(&target.tool)
+                    .map(|(distro_name, _)| distro_name.to_string()),
                 skill_id: target.skill_id,
                 skill_name: target.skill_name,
                 tool: target.tool,
@@ -446,7 +453,7 @@ pub fn sync_single_skill_to_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::skill_store::SkillRecord;
+    use crate::core::skill_store::{ScenarioRecord, SkillRecord};
     use std::fs;
     use tempfile::tempdir;
 
@@ -471,6 +478,18 @@ mod tests {
             update_status: "local_only".to_string(),
             last_checked_at: None,
             last_check_error: None,
+        }
+    }
+
+    fn sample_scenario() -> ScenarioRecord {
+        ScenarioRecord {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            description: None,
+            icon: None,
+            sort_order: 0,
+            created_at: 1,
+            updated_at: 1,
         }
     }
 
@@ -508,6 +527,64 @@ mod tests {
         assert_eq!(
             fs::read_to_string(target_root.join("demo-skill").join("SKILL.md")).unwrap(),
             "# replica"
+        );
+    }
+
+    #[test]
+    fn scenario_preview_identifies_wsl_target_runtime_and_location() {
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("wsl-preview.db")).unwrap();
+        let central_skill = tmp.path().join("primary").join("demo-skill");
+        let replica_root = tmp.path().join("replica");
+        let target_root = tmp.path().join("wsl-agent-skills");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::write(central_skill.join("SKILL.md"), "# primary").unwrap();
+
+        store.insert_skill(&sample_skill(&central_skill)).unwrap();
+        store.insert_scenario(&sample_scenario()).unwrap();
+        store.add_skill_to_scenario("default", "skill-1").unwrap();
+        store
+            .set_setting(
+                "custom_tool_paths",
+                r#"{"codex":"C:\\Users\\me\\codex-skills"}"#,
+            )
+            .unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "codex",
+                        "enabled": true,
+                        "skills_dir": target_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        let preview = preview_scenario_sync(&store, "default").unwrap();
+        let wsl_target = preview
+            .iter()
+            .find(|target| target.tool == "wsl:Ubuntu:codex")
+            .expect("WSL Codex target should be previewed");
+
+        assert_eq!(wsl_target.runtime_environment, "wsl");
+        assert_eq!(wsl_target.wsl_distro_name.as_deref(), Some("Ubuntu"));
+        assert!(
+            wsl_target
+                .target_path
+                .contains(&target_root.to_string_lossy().to_string()),
+            "{}",
+            wsl_target.target_path
+        );
+        assert!(
+            !wsl_target.target_path.contains(r"C:\Users\me\codex-skills"),
+            "{}",
+            wsl_target.target_path
         );
     }
 }
