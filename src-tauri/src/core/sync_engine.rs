@@ -81,7 +81,12 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
     ensure_dst_not_inside_src(source, target)?;
 
     // Remove existing target
-    remove_target(target).ok();
+    if matches!(mode, SyncMode::WslSymlink) {
+        remove_target(target)
+            .with_context(|| format!("Failed to remove existing target {:?}", target))?;
+    } else {
+        remove_target(target).ok();
+    }
 
     match mode {
         SyncMode::Symlink => {
@@ -172,11 +177,11 @@ fn create_wsl_symlink(link: &WslSymlinkCommand) -> Result<()> {
         &["mkdir", "-p", link.target_parent.as_str()],
         "create WSL target parent directory",
     )?;
-    run_wsl_fixed(
-        &link.distro_name,
-        &["ln", "-s", link.source.as_str(), link.target.as_str()],
-        "create WSL symlink",
-    )
+    run_wsl_fixed(&link.distro_name, &wsl_symlink_args(link), "create WSL symlink")
+}
+
+fn wsl_symlink_args(link: &WslSymlinkCommand) -> Vec<&str> {
+    vec!["ln", "-sT", link.source.as_str(), link.target.as_str()]
 }
 
 fn run_wsl_fixed(distro_name: &str, command_args: &[&str], action: &str) -> Result<()> {
@@ -455,6 +460,21 @@ mod tests {
 
         assert!(err.to_string().contains("WSL symlink mode"), "{err}");
         assert_eq!(fs::read_to_string(tgt.join("keep.txt")).unwrap(), "keep");
+    }
+
+    #[test]
+    fn wsl_symlink_command_treats_target_as_link_path_not_directory() {
+        let link = WslSymlinkCommand {
+            distro_name: "Ubuntu".to_string(),
+            source: "/home/me/.skills-manager/demo".to_string(),
+            target: "/home/me/.agents/skills/demo".to_string(),
+            target_parent: "/home/me/.agents/skills".to_string(),
+        };
+
+        assert_eq!(
+            wsl_symlink_args(&link),
+            vec!["ln", "-sT", "/home/me/.skills-manager/demo", "/home/me/.agents/skills/demo"]
+        );
     }
 
     #[test]
