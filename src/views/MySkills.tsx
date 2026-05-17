@@ -390,6 +390,18 @@ export function MySkills() {
     }
   }, []);
 
+  // Local-only status refresh: no `git fetch`, so it can fire from
+  // dependency-driven effects without driving the file-watcher → refresh
+  // → fetch feedback loop.
+  const refreshGitStatusLocal = useCallback(async () => {
+    try {
+      const status = await api.gitBackupStatus();
+      setGitStatus(status);
+    } catch {
+      // not critical
+    }
+  }, []);
+
   const refreshGitVersions = useCallback(async () => {
     if (!gitStatus?.is_repo) {
       setGitVersions([]);
@@ -445,10 +457,10 @@ export function MySkills() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      refreshGitStatus();
+      refreshGitStatusLocal();
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [skills, refreshGitStatus]);
+  }, [skills, refreshGitStatusLocal]);
 
   useEffect(() => {
     if (gitVersionsOpen && gitStatus?.is_repo) {

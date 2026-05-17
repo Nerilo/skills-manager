@@ -10,7 +10,10 @@ pub static QUITTING: AtomicBool = AtomicBool::new(false);
 static TRAY_SCENARIO_SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const MAIN_TRAY_ID: &str = "main-tray";
 const TRAY_SCENARIO_ITEM_PREFIX: &str = "tray-scenario:";
+#[cfg(target_os = "macos")]
 const CUSTOM_TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray/tray-icon-32.png");
+#[cfg(not(target_os = "macos"))]
+const CUSTOM_TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray/tray-icon-color-32.png");
 
 fn parse_bool_setting(value: Option<String>, default: bool) -> bool {
     match value.as_deref().map(str::trim).map(str::to_ascii_lowercase) {
@@ -248,16 +251,16 @@ fn ensure_tray_icon(app: &tauri::AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
-                log::info!("Tray menu clicked: show");
+                log::debug!("Tray menu clicked: show");
                 restore_main_window(app)
             }
             "quit" => {
-                log::info!("Tray menu clicked: quit");
+                log::debug!("Tray menu clicked: quit");
                 request_quit(app)
             }
             id => {
                 if let Some(scenario_id) = scenario_id_from_tray_item(id) {
-                    log::info!("Tray menu clicked: switch scenario to {scenario_id}");
+                    log::debug!("Tray menu clicked: switch scenario to {scenario_id}");
                     switch_scenario_from_tray(app, scenario_id);
                 }
             }
@@ -291,7 +294,7 @@ fn ensure_tray_icon(app: &tauri::AppHandle) -> tauri::Result<()> {
     }
 
     let _tray = builder.build(app)?;
-    log::info!("Tray icon created");
+    log::debug!("Tray icon created");
     Ok(())
 }
 
@@ -303,7 +306,7 @@ pub fn set_tray_icon_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<()
             ensure_tray_icon(&app_for_main).map_err(|e| e.to_string())
         } else {
             let _ = app_for_main.remove_tray_by_id(MAIN_TRAY_ID);
-            log::info!("Tray icon removed");
+            log::debug!("Tray icon removed");
             Ok(())
         };
         let _ = tx.send(result);
@@ -348,15 +351,39 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .level_for("tao", log::LevelFilter::Warn)
+                    .level_for("wry", log::LevelFilter::Warn)
+                    .level_for("hyper", log::LevelFilter::Warn)
+                    .level_for("reqwest", log::LevelFilter::Warn)
+                    .level_for("rustls", log::LevelFilter::Warn)
+                    .max_file_size(5 * 1024 * 1024)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+                    .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                    .format(|out, message, record| {
+                        out.finish(format_args!(
+                            "{} {:5} [{}] {}",
+                            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
+                            record.level(),
+                            record.target(),
+                            message
+                        ))
+                    })
+                    .build(),
+            )?;
+
+            core::panic_log::install_panic_hook(app.handle().clone());
+            log::info!(
+                "app start: version={} os={} arch={}",
+                app.config().version.clone().unwrap_or_default(),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
 
             if is_tray_icon_enabled(&store_for_setup) {
                 ensure_tray_icon(app.handle())?;
@@ -441,6 +468,11 @@ pub fn run() {
             commands::settings::remove_wsl_runtime_environment,
             commands::settings::open_central_repo_folder,
             commands::settings::check_app_update,
+            commands::settings::get_diagnostic_info,
+            commands::settings::get_recent_log_excerpt,
+            commands::settings::export_logs_zip,
+            commands::settings::check_last_panic,
+            commands::settings::clear_last_panic,
             commands::settings::app_exit,
             commands::settings::hide_to_tray,
             // Git Backup

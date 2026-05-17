@@ -118,7 +118,19 @@ fn sync_watch_set(
 }
 
 fn should_emit(event: &Event) -> bool {
-    !event.paths.is_empty()
+    if event.paths.is_empty() {
+        return false;
+    }
+    // Drop events that come exclusively from `.git/` subtrees. `git fetch`
+    // writes FETCH_HEAD/refs/packed-refs every time refreshGitStatus runs;
+    // forwarding those to the UI causes refreshAppData → setManagedSkills →
+    // refreshGitStatus to loop back into another fetch.
+    event.paths.iter().any(|p| !is_in_git_dir(p))
+}
+
+fn is_in_git_dir(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new(".git"))
 }
 
 pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Arc<SkillStore>) {

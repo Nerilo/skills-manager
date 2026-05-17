@@ -1,15 +1,44 @@
 use crate::core::{
     central_repo, error::AppError, git_backup, git_fetcher, skill_metadata, sync_metadata,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::State;
 use walkdir::WalkDir;
 
 use crate::core::skill_store::SkillStore;
 
+static FETCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// RAII guard that clears `FETCH_IN_FLIGHT` on drop. Survives future
+/// cancellation, panic in the blocking task, and early returns — without
+/// it, a dropped command future would strand the flag set forever.
+struct FetchInFlightGuard;
+
+impl FetchInFlightGuard {
+    fn try_acquire() -> Option<Self> {
+        FETCH_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| FetchInFlightGuard)
+    }
+}
+
+impl Drop for FetchInFlightGuard {
+    fn drop(&mut self) {
+        FETCH_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
 #[tauri::command]
 pub async fn git_backup_fetch(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
     let _ = store;
+    // Coalesce concurrent fetches: a `git fetch` against the central repo
+    // already in flight makes any duplicate request redundant, and stacking
+    // them up holds open ssh connections to GitHub.
+    let Some(_guard) = FetchInFlightGuard::try_acquire() else {
+        return Ok(());
+    };
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
         git_backup::fetch_remote(&skills_dir).map_err(AppError::git)

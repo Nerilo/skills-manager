@@ -448,6 +448,47 @@ export const addWslRuntimeEnvironment = (
 export const removeWslRuntimeEnvironment = (distroName: string) =>
   invoke<void>("remove_wsl_runtime_environment", { distroName });
 
+export interface DiagnosticInfo {
+  app_version: string;
+  os: string;
+  os_version: string;
+  arch: string;
+  central_repo_path: string;
+  central_repo_path_overridden: boolean;
+}
+
+export const getDiagnosticInfo = () =>
+  invoke<DiagnosticInfo>("get_diagnostic_info");
+
+export interface LogExcerpt {
+  log_path: string;
+  excerpt: string;
+  line_count: number;
+  has_warnings: boolean;
+}
+
+export const getRecentLogExcerpt = () =>
+  invoke<LogExcerpt>("get_recent_log_excerpt");
+
+export interface LogExportResult {
+  zip_path: string;
+  file_count: number;
+}
+
+export const exportLogsZip = () =>
+  invoke<LogExportResult>("export_logs_zip");
+
+export interface PanicInfo {
+  timestamp: string;
+  message: string;
+}
+
+export const checkLastPanic = () =>
+  invoke<PanicInfo | null>("check_last_panic");
+
+export const clearLastPanic = () =>
+  invoke<void>("clear_last_panic");
+
 // ── Git Backup ──
 
 export type GitUpstreamHealth =

@@ -15,8 +15,11 @@ import {
   Sun,
   Moon,
   Monitor,
+  AlertTriangle,
   BookOpen,
+  Bug,
   Download,
+  FileArchive,
   Type,
   Key,
   Pencil,
@@ -47,6 +50,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { check as checkUpdater } from "@tauri-apps/plugin-updater";
 import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
 import { cn } from "../utils";
@@ -174,6 +178,9 @@ export function Settings() {
   const [refreshing, setRefreshing] = useState(false);
   const [openingRepo, setOpeningRepo] = useState(false);
   const [openingGithub, setOpeningGithub] = useState(false);
+  const [reportingIssue, setReportingIssue] = useState(false);
+  const [exportingLogs, setExportingLogs] = useState(false);
+  const [lastPanic, setLastPanic] = useState<api.PanicInfo | null>(null);
   const [centralRepoPath, setCentralRepoPath] = useState("");
   const [centralRepoPathOverride, setCentralRepoPathOverride] = useState<string | null>(null);
   const [editingCentralRepoPath, setEditingCentralRepoPath] = useState(false);
@@ -314,6 +321,10 @@ export function Settings() {
       toast.error(t("common.error"));
     }
   };
+
+  useEffect(() => {
+    api.checkLastPanic().then(setLastPanic).catch(() => {});
+  }, []);
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
@@ -529,6 +540,122 @@ export function Settings() {
       toast.error(t("common.error"));
     } finally {
       setOpeningGithub(false);
+    }
+  };
+
+  const handleExportLogs = async () => {
+    setExportingLogs(true);
+    try {
+      const result = await api.exportLogsZip();
+      toast.success(t("settings.exportLogsDone", { count: result.file_count }), {
+        description: result.zip_path,
+      });
+    } catch (error) {
+      console.error("Failed to export logs", error);
+      toast.error(t("settings.exportLogsFailed"));
+    } finally {
+      setExportingLogs(false);
+    }
+  };
+
+  const handleDismissPanic = async () => {
+    try {
+      await api.clearLastPanic();
+    } catch (err) {
+      console.warn("Failed to clear last_panic.log", err);
+    }
+    setLastPanic(null);
+  };
+
+  const handleReportIssue = async () => {
+    setReportingIssue(true);
+    try {
+      const [info, logExcerpt, panicInfo] = await Promise.all([
+        api.getDiagnosticInfo(),
+        api.getRecentLogExcerpt().catch((err) => {
+          console.warn("Failed to read log excerpt", err);
+          return null;
+        }),
+        api.checkLastPanic().catch(() => null),
+      ]);
+      const enabledBuiltin = enabledTools
+        .filter((tool) => !tool.is_custom)
+        .map((tool) => tool.key);
+      const enabledCustomCount = enabledTools.filter((tool) => tool.is_custom).length;
+      const agentsLine = enabledBuiltin.length === 0 && enabledCustomCount === 0
+        ? "(none)"
+        : [
+            enabledBuiltin.join(", "),
+            enabledCustomCount > 0 ? `${enabledCustomCount} custom` : "",
+          ].filter(Boolean).join(", ");
+      const parts = [
+        "**Diagnostics** (auto-collected by Skills Manager)",
+        "",
+        `- App version: \`${info.app_version}\``,
+        `- OS: \`${info.os} ${info.os_version} (${info.arch})\``,
+        `- UI locale: \`${i18n.language}\``,
+        `- Enabled agents: ${agentsLine}`,
+        `- Central repo: \`${info.central_repo_path}\`${info.central_repo_path_overridden ? " (custom path)" : ""}`,
+      ];
+      if (panicInfo) {
+        parts.push(
+          "",
+          `**Last panic** (${panicInfo.timestamp})`,
+          "",
+          "```",
+          panicInfo.message,
+          "```",
+        );
+      }
+      if (logExcerpt) {
+        parts.push(
+          "",
+          `**Recent log** (\`${logExcerpt.log_path}\`, ${logExcerpt.line_count} lines${logExcerpt.has_warnings ? ", includes warnings/errors" : ""})`,
+          "",
+          "```log",
+          logExcerpt.excerpt,
+          "```",
+          "",
+          `> ${t("settings.reportIssueExportHint")}`,
+        );
+      }
+      const md = parts.join("\n");
+      let copied = false;
+      try {
+        await clipboardWriteText(md);
+        copied = true;
+      } catch (err) {
+        console.error("Clipboard write failed", err);
+        try {
+          await navigator.clipboard.writeText(md);
+          copied = true;
+        } catch (err2) {
+          console.error("Browser clipboard fallback also failed", err2);
+        }
+      }
+      try {
+        await openUrl(`${GITHUB_URL}/issues/new?template=bug_report.md`);
+      } catch (err) {
+        console.error("Failed to open issue page", err);
+      }
+      if (copied) {
+        toast.success(t("settings.diagnosticsCopied"));
+        if (panicInfo) {
+          try {
+            await api.clearLastPanic();
+          } catch (err) {
+            console.warn("Failed to clear last_panic.log", err);
+          }
+          setLastPanic(null);
+        }
+      } else {
+        toast.message(t("settings.diagnosticsCopyManual"), { description: md });
+      }
+    } catch (error) {
+      console.error("Failed to prepare diagnostics", error);
+      toast.error(t("common.error"));
+    } finally {
+      setReportingIssue(false);
     }
   };
 
@@ -1678,7 +1805,37 @@ export function Settings() {
         </section>
 
         {/* About */}
-        <section>
+        <section className="space-y-2">
+          {lastPanic && (
+            <div className="app-panel flex flex-wrap items-center justify-between gap-2 p-3 border border-red-500/40 bg-red-500/10">
+              <div className="flex min-w-0 items-center gap-2 text-[13px] text-red-700 dark:text-red-300">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{t("settings.panicBanner", { time: lastPanic.timestamp })}</span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleReportIssue}
+                  disabled={reportingIssue}
+                  className={`${actionButtonClass} bg-red-600 hover:bg-red-700 text-white border-red-600`}
+                >
+                  {reportingIssue ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Bug className="w-3 h-3" />
+                  )}
+                  {t("settings.reportIssue")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDismissPanic}
+                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+                >
+                  {t("settings.panicDismiss")}
+                </button>
+              </div>
+            </div>
+          )}
           <div className="app-panel flex flex-wrap items-start justify-between gap-3 p-4">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-surface-hover border border-border flex items-center justify-center">
@@ -1751,6 +1908,34 @@ export function Settings() {
                 className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
               >
                 <BookOpen className="w-3 h-3" /> {t("settings.help")}
+              </button>
+              <button
+                type="button"
+                onClick={handleReportIssue}
+                disabled={reportingIssue}
+                title={t("settings.reportIssueHint")}
+                className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+              >
+                {reportingIssue ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Bug className="w-3 h-3" />
+                )}
+                {t("settings.reportIssue")}
+              </button>
+              <button
+                type="button"
+                onClick={handleExportLogs}
+                disabled={exportingLogs}
+                title={t("settings.exportLogsHint")}
+                className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+              >
+                {exportingLogs ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <FileArchive className="w-3 h-3" />
+                )}
+                {t("settings.exportLogs")}
               </button>
               <button
                 type="button"
