@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::{
+    central_repo,
     error::AppError,
     skill_distribution,
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
@@ -121,10 +122,45 @@ pub fn preview_scenario_sync(
     })
 }
 
+fn sync_wsl_library_replica_for_tool(store: &SkillStore, tool: &str) -> Result<(), AppError> {
+    let Some((distro_name, _agent_key)) = wsl_runtime::parse_wsl_tool_key(tool) else {
+        return Ok(());
+    };
+    let runtime = wsl_runtime::get_runtime_environment(store, distro_name)
+        .map_err(|err| AppError::invalid_input(err.to_string()))?;
+    sync_engine::sync_library_replica(
+        &central_repo::skills_dir(),
+        &PathBuf::from(runtime.library_replica_path),
+    )
+    .map_err(|err| AppError::io(format!("Failed to sync WSL Library Replica: {err}")))
+}
+
+fn sync_wsl_library_replicas_for_targets(
+    store: &SkillStore,
+    desired_targets: &[ScenarioSyncTarget],
+) -> HashSet<String> {
+    let mut synced = HashSet::new();
+    let mut failed = HashSet::new();
+    for target in desired_targets {
+        let Some((distro_name, _agent_key)) = wsl_runtime::parse_wsl_tool_key(&target.tool) else {
+            continue;
+        };
+        if synced.insert(distro_name.to_string()) {
+            if let Err(err) = sync_wsl_library_replica_for_tool(store, &target.tool) {
+                log::warn!("Failed to sync WSL Library Replica for {distro_name}: {err}");
+                failed.insert(distro_name.to_string());
+            }
+        }
+    }
+    failed
+}
+
 pub fn sync_desired_targets(
     store: &SkillStore,
     desired_targets: &[ScenarioSyncTarget],
 ) -> Result<(), AppError> {
+    let failed_wsl_replicas = sync_wsl_library_replicas_for_targets(store, desired_targets);
+
     let existing_targets: HashMap<(String, String), SkillTargetRecord> = store
         .get_all_targets()
         .map_err(AppError::db)?
@@ -133,6 +169,16 @@ pub fn sync_desired_targets(
         .collect();
 
     for desired in desired_targets {
+        if let Some((distro_name, _agent_key)) = wsl_runtime::parse_wsl_tool_key(&desired.tool) {
+            if failed_wsl_replicas.contains(distro_name) {
+                log::warn!(
+                    "Skipping WSL target {} because its Library Replica failed to sync",
+                    desired.target.display()
+                );
+                continue;
+            }
+        }
+
         let key = (desired.skill_id.clone(), desired.tool.clone());
         if let Some(existing) = existing_targets.get(&key) {
             let target_path = PathBuf::from(&existing.target_path);
@@ -306,6 +352,14 @@ pub fn sync_skill_to_active_scenario(
                 }
 
                 let target = adapter.skills_dir().join(&target_name);
+                if let Err(err) = sync_wsl_library_replica_for_tool(store, &adapter.key) {
+                    log::warn!(
+                        "Failed to sync WSL Library Replica for {} before syncing {}: {err}",
+                        adapter.key,
+                        target.display()
+                    );
+                    continue;
+                }
                 let source = skill_distribution::source_for_target(store, &skill, &adapter.key)?;
                 let mode =
                     sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
@@ -426,6 +480,7 @@ pub fn sync_single_skill_to_tool(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Skill not found"))?;
 
+    sync_wsl_library_replica_for_tool(store, tool)?;
     let source = skill_distribution::source_for_target(store, &skill, tool)?;
     let target = adapter
         .skills_dir()
@@ -494,24 +549,24 @@ mod tests {
     }
 
     #[test]
-    fn wsl_target_sync_uses_library_replica_as_source() {
+    fn wsl_target_sync_refreshes_library_replica_before_linking_agent() {
+        let _guard = central_repo::test_base_dir_lock();
         let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
         let store = SkillStore::new(&tmp.path().join("wsl-sync.db")).unwrap();
-        let central_skill = tmp.path().join("primary").join("demo-skill");
-        let replica_skill = tmp.path().join("replica").join("demo-skill");
+        let central_skill = central_repo::skills_dir().join("demo-skill");
+        let replica_root = tmp.path().join(".skills-manager");
         let target_root = tmp.path().join("wsl-agent-skills");
         fs::create_dir_all(&central_skill).unwrap();
-        fs::create_dir_all(&replica_skill).unwrap();
         fs::create_dir_all(&target_root).unwrap();
         fs::write(central_skill.join("SKILL.md"), "# primary").unwrap();
-        fs::write(replica_skill.join("SKILL.md"), "# replica").unwrap();
         store.insert_skill(&sample_skill(&central_skill)).unwrap();
         store
             .set_setting(
                 "wsl_runtime_environments",
                 &serde_json::json!([{
                     "distro_name": "Ubuntu",
-                    "library_replica_path": tmp.path().join("replica").to_string_lossy(),
+                    "library_replica_path": replica_root.to_string_lossy(),
                     "agent_targets": [{
                         "key": "codex",
                         "enabled": true,
@@ -527,8 +582,80 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(target_root.join("demo-skill").join("SKILL.md")).unwrap(),
-            "# replica"
+            "# primary"
         );
+        assert_eq!(
+            fs::read_to_string(replica_root.join("demo-skill").join("SKILL.md")).unwrap(),
+            "# primary"
+        );
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn scenario_sync_continues_non_wsl_targets_when_wsl_replica_fails() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
+        let store = SkillStore::new(&tmp.path().join("wsl-failure.db")).unwrap();
+        let central_skill = central_repo::skills_dir().join("demo-skill");
+        let custom_target_root = tmp.path().join("custom-agent-skills");
+        let wsl_target_root = tmp.path().join("wsl-agent-skills");
+        let blocked_parent = tmp.path().join("blocked-parent");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::create_dir_all(&custom_target_root).unwrap();
+        fs::create_dir_all(&wsl_target_root).unwrap();
+        fs::write(central_skill.join("SKILL.md"), "# primary").unwrap();
+        fs::write(&blocked_parent, "not a directory").unwrap();
+
+        store.insert_skill(&sample_skill(&central_skill)).unwrap();
+        store.insert_scenario(&sample_scenario()).unwrap();
+        store.add_skill_to_scenario("default", "skill-1").unwrap();
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([{
+                    "key": "test_agent",
+                    "display_name": "Test Agent",
+                    "skills_dir": custom_target_root.to_string_lossy()
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        let disabled_builtin_tools: Vec<String> = tool_adapters::default_tool_adapters()
+            .into_iter()
+            .map(|adapter| adapter.key)
+            .collect();
+        store
+            .set_setting(
+                "disabled_tools",
+                &serde_json::to_string(&disabled_builtin_tools).unwrap(),
+            )
+            .unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": blocked_parent.join(".skills-manager").to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "codex",
+                        "enabled": true,
+                        "skills_dir": wsl_target_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        sync_scenario_skills(&store, "default").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(custom_target_root.join("demo-skill").join("SKILL.md")).unwrap(),
+            "# primary"
+        );
+        assert!(!wsl_target_root.join("demo-skill").exists());
+        central_repo::set_test_base_dir_override(None);
     }
 
     #[test]

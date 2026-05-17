@@ -177,7 +177,11 @@ fn create_wsl_symlink(link: &WslSymlinkCommand) -> Result<()> {
         &["mkdir", "-p", link.target_parent.as_str()],
         "create WSL target parent directory",
     )?;
-    run_wsl_fixed(&link.distro_name, &wsl_symlink_args(link), "create WSL symlink")
+    run_wsl_fixed(
+        &link.distro_name,
+        &wsl_symlink_args(link),
+        "create WSL symlink",
+    )
 }
 
 fn wsl_symlink_args(link: &WslSymlinkCommand) -> Vec<&str> {
@@ -343,7 +347,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         let dest_path = dst.join(entry.file_name());
         if ft.is_dir() {
             let name = entry.file_name();
-            if name == ".git" {
+            if name == ".git" || name == ".skills-manager" {
                 continue;
             }
             copy_dir_recursive(&entry.path(), &dest_path)?;
@@ -473,7 +477,12 @@ mod tests {
 
         assert_eq!(
             wsl_symlink_args(&link),
-            vec!["ln", "-sT", "/home/me/.skills-manager/demo", "/home/me/.agents/skills/demo"]
+            vec![
+                "ln",
+                "-sT",
+                "/home/me/.skills-manager/demo",
+                "/home/me/.agents/skills/demo"
+            ]
         );
     }
 
@@ -684,6 +693,29 @@ mod tests {
             "# primary"
         );
         assert!(!replica.join("replica-only").exists());
+    }
+
+    #[test]
+    fn sync_library_replica_skips_internal_metadata_dir() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = tmp.path().join("runtime").join(".skills-manager");
+        fs::create_dir_all(primary.join("hello")).unwrap();
+        fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
+        fs::create_dir_all(primary.join(".skills-manager").join("skills")).unwrap();
+        fs::write(
+            primary
+                .join(".skills-manager")
+                .join("skills")
+                .join("metadata.json"),
+            "{}",
+        )
+        .unwrap();
+
+        sync_library_replica(&primary, &replica).unwrap();
+
+        assert!(replica.join("hello/SKILL.md").exists());
+        assert!(!replica.join(".skills-manager").exists());
     }
 
     #[test]
