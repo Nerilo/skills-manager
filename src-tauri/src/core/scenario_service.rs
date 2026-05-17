@@ -135,6 +135,14 @@ fn sync_wsl_library_replica_for_tool(store: &SkillStore, tool: &str) -> Result<(
     .map_err(|err| AppError::io(format!("Failed to sync WSL Library Replica: {err}")))
 }
 
+fn tool_globally_enabled(store: &SkillStore, tool: &str) -> bool {
+    wsl_runtime::parse_wsl_tool_key(tool)
+        .map(|(distro_name, agent_key)| {
+            wsl_runtime::agent_target_enabled(store, distro_name, agent_key)
+        })
+        .unwrap_or_else(|| !tool_service::get_disabled_tools(store).contains(&tool.to_string()))
+}
+
 fn sync_wsl_library_replicas_for_targets(
     store: &SkillStore,
     desired_targets: &[ScenarioSyncTarget],
@@ -468,7 +476,7 @@ pub fn sync_single_skill_to_tool(
         )));
     }
 
-    if tool_service::get_disabled_tools(store).contains(&tool.to_string()) {
+    if !tool_globally_enabled(store, tool) {
         return Err(AppError::invalid_input(format!(
             "{} is disabled",
             adapter.display_name
@@ -588,6 +596,43 @@ mod tests {
             fs::read_to_string(replica_root.join("demo-skill").join("SKILL.md")).unwrap(),
             "# primary"
         );
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn direct_wsl_target_sync_respects_runtime_agent_disabled_state() {
+        let _guard = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("center")));
+        let store = SkillStore::new(&tmp.path().join("wsl-disabled-direct-sync.db")).unwrap();
+        let central_skill = central_repo::skills_dir().join("demo-skill");
+        let replica_root = tmp.path().join(".skills-manager");
+        let target_root = tmp.path().join("wsl-agent-skills");
+        fs::create_dir_all(&central_skill).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
+        fs::write(central_skill.join("SKILL.md"), "# primary").unwrap();
+        store.insert_skill(&sample_skill(&central_skill)).unwrap();
+        store
+            .set_setting(
+                "wsl_runtime_environments",
+                &serde_json::json!([{
+                    "distro_name": "Ubuntu",
+                    "library_replica_path": replica_root.to_string_lossy(),
+                    "agent_targets": [{
+                        "key": "codex",
+                        "enabled": false,
+                        "skills_dir": target_root.to_string_lossy()
+                    }]
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        store.set_setting("sync_mode", "copy").unwrap();
+
+        let err = sync_single_skill_to_tool(&store, "skill-1", "wsl:Ubuntu:codex").unwrap_err();
+
+        assert!(err.to_string().contains("disabled"), "{err}");
+        assert!(!target_root.join("demo-skill").exists());
         central_repo::set_test_base_dir_override(None);
     }
 

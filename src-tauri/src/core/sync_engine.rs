@@ -263,12 +263,20 @@ pub fn sync_library_replica(primary_library: &Path, library_replica: &Path) -> R
 }
 
 fn ensure_library_replica_target(library_replica: &Path) -> Result<()> {
-    let name = library_replica
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    if name != ".skills-manager" {
-        anyhow::bail!("Library Replica target must be named .skills-manager");
+    if is_wsl_unc_path(library_replica) {
+        let raw = library_replica.to_string_lossy();
+        let normalized = raw.replace('/', r"\");
+        let distro = wsl_distro_from_unc(&normalized)?;
+        let linux_path = wsl_linux_path_from_unc(&distro, &normalized)?;
+        let depth = linux_path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .count();
+        if depth < 3 {
+            anyhow::bail!(
+                "Library Replica target must include a dedicated replica directory, not a home, mount, or root"
+            );
+        }
     }
     Ok(())
 }
@@ -717,6 +725,27 @@ mod tests {
     }
 
     #[test]
+    fn sync_library_replica_allows_normalized_runtime_paths() {
+        let tmp = tempdir().unwrap();
+        let primary = tmp.path().join("primary").join("skills");
+        let replica = tmp
+            .path()
+            .join("home")
+            .join("me")
+            .join(".codex")
+            .join("skills");
+        fs::create_dir_all(primary.join("hello")).unwrap();
+        fs::write(primary.join("hello/SKILL.md"), "# primary").unwrap();
+
+        sync_library_replica(&primary, &replica).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(replica.join("hello/SKILL.md")).unwrap(),
+            "# primary"
+        );
+    }
+
+    #[test]
     fn sync_library_replica_skips_internal_metadata_dir() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
@@ -758,21 +787,18 @@ mod tests {
     }
 
     #[test]
-    fn sync_library_replica_rejects_non_skills_manager_target() {
+    fn sync_library_replica_rejects_shallow_target() {
         let tmp = tempdir().unwrap();
         let primary = tmp.path().join("primary").join("skills");
-        let replica = tmp.path().join("home").join("me").join("Documents");
+        let replica = Path::new(r"\\wsl.localhost\Ubuntu\home");
         fs::create_dir_all(&primary).unwrap();
         fs::write(primary.join("SKILL.md"), "# primary").unwrap();
-        fs::create_dir_all(&replica).unwrap();
-        fs::write(replica.join("personal.txt"), "keep me").unwrap();
 
         let err = sync_library_replica(&primary, &replica).unwrap_err();
 
-        assert!(err.to_string().contains(".skills-manager"), "{err}");
-        assert_eq!(
-            fs::read_to_string(replica.join("personal.txt")).unwrap(),
-            "keep me"
+        assert!(
+            err.to_string().contains("dedicated replica directory"),
+            "{err}"
         );
     }
 
