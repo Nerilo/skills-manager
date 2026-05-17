@@ -9,6 +9,7 @@ pub mod git_fetcher;
 pub mod install_cancel;
 pub mod installer;
 pub mod migrations;
+pub mod process;
 pub mod project_scanner;
 pub mod repo_lock;
 pub mod scanner;

@@ -8,7 +8,9 @@ use crate::commands::projects::{
     source_ref_matches_skill_path, ProjectSkillDocumentDto,
 };
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
-use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
+use crate::core::{
+    error::AppError, installer, process, project_scanner, sync_engine, tool_adapters,
+};
 
 fn adapter_for_agent(
     store: &SkillStore,
@@ -217,7 +219,7 @@ fn read_wsl_skill_document(
     let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
     for candidate in &candidates {
         let file_path = format!("{escaped}/{candidate}");
-        let output = std::process::Command::new("wsl.exe")
+        let output = process::wsl_command()
             .args([
                 "-d",
                 &distro,

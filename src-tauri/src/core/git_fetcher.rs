@@ -1217,38 +1217,53 @@ mod tests {
 
     #[test]
     fn repo_cache_dir_is_deterministic() {
+        let _guard = central_repo::test_base_dir_lock();
+        central_repo::set_test_base_dir_override(None);
         let a = repo_cache_dir("https://github.com/acme/skills.git");
         let b = repo_cache_dir("https://github.com/acme/skills.git");
+        central_repo::set_test_base_dir_override(None);
         assert_eq!(a, b);
     }
 
     #[test]
     fn repo_cache_dir_differs_for_different_urls() {
+        let _guard = central_repo::test_base_dir_lock();
+        central_repo::set_test_base_dir_override(None);
         let a = repo_cache_dir("https://github.com/acme/skills.git");
         let b = repo_cache_dir("https://github.com/acme/other.git");
+        central_repo::set_test_base_dir_override(None);
         assert_ne!(a, b);
     }
 
     #[test]
     fn repo_cache_dir_canonicalizes_dot_git_suffix() {
         // `…/y` and `…/y.git` clone the same repo; they must share a cache slot.
+        let _guard = central_repo::test_base_dir_lock();
+        central_repo::set_test_base_dir_override(None);
         let a = repo_cache_dir("https://github.com/acme/skills");
         let b = repo_cache_dir("https://github.com/acme/skills.git");
+        central_repo::set_test_base_dir_override(None);
         assert_eq!(a, b);
     }
 
     #[test]
     fn repo_cache_dir_canonicalizes_trailing_slash() {
+        let _guard = central_repo::test_base_dir_lock();
+        central_repo::set_test_base_dir_override(None);
         let a = repo_cache_dir("https://github.com/acme/skills/");
         let b = repo_cache_dir("https://github.com/acme/skills");
+        central_repo::set_test_base_dir_override(None);
         assert_eq!(a, b);
     }
 
     #[test]
     fn repo_cache_dir_canonicalizes_dot_git_with_trailing_slash() {
         // `.git` after a trailing slash strip — must collapse to the same key.
+        let _guard = central_repo::test_base_dir_lock();
+        central_repo::set_test_base_dir_override(None);
         let a = repo_cache_dir("https://github.com/acme/skills.git/");
         let b = repo_cache_dir("https://github.com/acme/skills");
+        central_repo::set_test_base_dir_override(None);
         assert_eq!(a, b);
     }
 

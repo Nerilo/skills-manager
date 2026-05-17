@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use super::process;
 
 /// Refuse to copy when `dst` would land inside `src` (or equal `src`).
 /// Otherwise the recursive copy walks into the freshly-created `dst` and
@@ -189,7 +190,7 @@ fn wsl_symlink_args(link: &WslSymlinkCommand) -> Vec<&str> {
 }
 
 fn run_wsl_fixed(distro_name: &str, command_args: &[&str], action: &str) -> Result<()> {
-    let output = Command::new("wsl.exe")
+    let output = process::wsl_command()
         .arg("-d")
         .arg(distro_name)
         .arg("--")
