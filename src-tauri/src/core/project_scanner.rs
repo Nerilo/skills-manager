@@ -1,4 +1,6 @@
 use serde::Serialize;
+use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use super::{content_hash, skill_metadata, sync_engine};
@@ -163,12 +165,12 @@ fn push_skill_info(
     });
 }
 
-fn is_wsl_symlink_skill_dir(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    let Some((distro, linux_path)) = wsl_unc_to_linux_path(&path_str) else {
-        return false;
-    };
-    wsl_path_has_skill_marker(&distro, &linux_path)
+#[derive(Debug, Clone)]
+struct WslSkillProbe {
+    meta: skill_metadata::SkillMeta,
+    files: Vec<String>,
+    target_linux_path: Option<String>,
+    last_modified_at: Option<i64>,
 }
 
 fn push_wsl_symlink_skill_info(
@@ -178,6 +180,7 @@ fn push_wsl_symlink_skill_info(
     agent: &str,
     agent_display_name: &str,
     skills: &mut Vec<ProjectSkillInfo>,
+    probe: &WslSkillProbe,
 ) {
     let dir_name = path
         .file_name()
@@ -189,39 +192,22 @@ fn push_wsl_symlink_skill_info(
         .to_string_lossy()
         .replace('\\', "/");
 
-    let path_str = path.to_string_lossy();
-    let meta = if let Some((distro, linux_path)) = wsl_unc_to_linux_path(&path_str) {
-        wsl_read_skill_md(&distro, &linux_path)
-    } else {
-        skill_metadata::SkillMeta {
-            name: None,
-            description: None,
-        }
-    };
-
-    let name = meta
+    let name = probe
+        .meta
         .name
+        .clone()
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| dir_name.clone());
 
-    let files = wsl_list_files_for_skill(&path_str);
-
-    let (content_hash, last_modified_at) =
-        if let Some((distro, linux_path)) = wsl_unc_to_linux_path(&path_str) {
-            let hash = wsl_content_hash_via_readlink(&distro, &linux_path);
-            let modified = wsl_latest_modified_millis(&distro, &linux_path);
-            (hash, modified)
-        } else {
-            (None, None)
-        };
+    let content_hash = wsl_content_hash_from_target(path, probe.target_linux_path.as_deref());
 
     skills.push(ProjectSkillInfo {
         name,
         dir_name: dir_name.clone(),
         relative_path,
-        description: meta.description,
+        description: probe.meta.description.clone(),
         path: path.to_string_lossy().to_string(),
-        files,
+        files: probe.files.clone(),
         enabled,
         agent: agent.to_string(),
         agent_display_name: agent_display_name.to_string(),
@@ -229,7 +215,7 @@ fn push_wsl_symlink_skill_info(
         in_center: false,
         sync_status: "project_only".to_string(),
         center_skill_id: None,
-        last_modified_at,
+        last_modified_at: probe.last_modified_at,
         content_hash,
     });
 }
@@ -243,106 +229,171 @@ fn wsl_unc_to_linux_path(unc_path: &str) -> Option<(String, String)> {
     Some((distro.to_string(), linux_path))
 }
 
-fn wsl_path_has_skill_marker(distro: &str, linux_path: &str) -> bool {
-    let escaped = wsl_bash_escape(linux_path);
-    let output = std::process::Command::new("wsl.exe")
-        .args([
-            "-d",
-            distro,
-            "-e",
-            "/bin/bash",
-            "-c",
-            &format!(
-                "if [ -d '{escaped}' ] && ([ -f '{escaped}/SKILL.md' ] || [ -f '{escaped}/skill.md' ]); then echo YES; fi"
-            ),
-        ])
-        .output();
-    match output {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "YES",
-        Err(_) => false,
-    }
-}
+const WSL_BATCH_SCRIPT: &str = r#"
+while IFS= read -r path; do
+  [ -d "$path" ] || continue
+  skill_file=""
+  if [ -f "$path/SKILL.md" ]; then
+    skill_file="$path/SKILL.md"
+  elif [ -f "$path/skill.md" ]; then
+    skill_file="$path/skill.md"
+  else
+    continue
+  fi
 
-fn wsl_read_skill_md(distro: &str, linux_path: &str) -> skill_metadata::SkillMeta {
-    let escaped = wsl_bash_escape(linux_path);
-    let candidates = ["SKILL.md", "skill.md"];
-    for candidate in &candidates {
-        let file_path = format!("{escaped}/{candidate}");
-        let output = std::process::Command::new("wsl.exe")
-            .args([
-                "-d",
-                distro,
-                "-e",
-                "/bin/bash",
-                "-c",
-                &format!("cat '{file_path}'"),
-            ])
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() {
-                let content = String::from_utf8_lossy(&out.stdout);
-                let meta = skill_metadata::parse_frontmatter(&content);
-                if meta.name.is_some() {
-                    return meta;
-                }
+  printf '\036\n'
+  printf 'PATH %s\n' "$path"
+  target=$(readlink -f "$path" 2>/dev/null || true)
+  printf 'TARGET %s\n' "$target"
+  mtime=$(find -L "$path" -type f \( -name '.DS_Store' -o -name '.git' \) -prune -o -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+  printf 'MTIME %s\n' "$mtime"
+  printf 'FILES\n'
+  find -L "$path" -maxdepth 1 -type f -printf '%f\n' 2>/dev/null
+  printf 'END_FILES\n'
+  printf 'SKILL\n'
+  cat "$skill_file" 2>/dev/null || true
+  printf '\nEND_SKILL\n'
+done
+"#;
+
+fn wsl_probe_symlink_skills(paths: &[PathBuf]) -> HashMap<PathBuf, WslSkillProbe> {
+    let mut by_distro: HashMap<String, Vec<(PathBuf, String)>> = HashMap::new();
+    for path in paths {
+        let path_str = path.to_string_lossy();
+        if let Some((distro, linux_path)) = wsl_unc_to_linux_path(&path_str) {
+            by_distro
+                .entry(distro)
+                .or_default()
+                .push((path.clone(), linux_path));
+        }
+    }
+
+    let mut probes = HashMap::new();
+    for (distro, distro_paths) in by_distro {
+        let linux_paths: Vec<String> = distro_paths
+            .iter()
+            .map(|(_, linux_path)| linux_path.clone())
+            .collect();
+        let Some(output) = run_wsl_skill_probe(&distro, &linux_paths) else {
+            continue;
+        };
+        let parsed = parse_wsl_skill_probe_output(&output);
+        for (path, linux_path) in distro_paths {
+            if let Some(probe) = parsed.get(&linux_path) {
+                probes.insert(path, probe.clone());
             }
         }
     }
-    skill_metadata::SkillMeta {
-        name: None,
-        description: None,
+    probes
+}
+
+fn run_wsl_skill_probe(distro: &str, linux_paths: &[String]) -> Option<String> {
+    let mut child = std::process::Command::new("wsl.exe")
+        .args(["-d", distro, "-e", "/bin/bash", "-c", WSL_BATCH_SCRIPT])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    {
+        let stdin = child.stdin.as_mut()?;
+        for path in linux_paths {
+            writeln!(stdin, "{path}").ok()?;
+        }
     }
-}
 
-fn wsl_list_files_for_skill(unc_path: &str) -> Vec<String> {
-    let Some((distro, linux_path)) = wsl_unc_to_linux_path(unc_path) else {
-        return Vec::new();
-    };
-    let escaped = wsl_bash_escape(&linux_path);
-    let output = std::process::Command::new("wsl.exe")
-        .args([
-            "-d",
-            &distro,
-            "-e",
-            "/bin/bash",
-            "-c",
-            &format!("find -L '{escaped}' -maxdepth 1 -type f -printf '%f\\n'"),
-        ])
-        .output();
-    match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(String::from)
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn wsl_bash_escape(s: &str) -> String {
-    s.replace('\'', "'\\''")
-}
-
-fn wsl_content_hash_via_readlink(distro: &str, linux_path: &str) -> Option<String> {
-    let escaped = wsl_bash_escape(linux_path);
-    let output = std::process::Command::new("wsl.exe")
-        .args([
-            "-d",
-            distro,
-            "-e",
-            "/bin/bash",
-            "-c",
-            &format!("readlink -f '{escaped}'"),
-        ])
-        .output();
-    let Ok(out) = output else { return None };
-    if !out.status.success() {
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
         return None;
     }
-    let target_linux = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if target_linux.is_empty() {
-        return None;
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn parse_wsl_skill_probe_output(output: &str) -> HashMap<String, WslSkillProbe> {
+    let mut probes = HashMap::new();
+    for record in output.split('\x1e') {
+        let record = record.trim_start_matches('\n');
+        if record.trim().is_empty() {
+            continue;
+        }
+
+        let mut linux_path = None;
+        let mut target_linux_path = None;
+        let mut last_modified_at = None;
+        let mut files = Vec::new();
+        let mut skill_md = String::new();
+        let mut section = "";
+
+        for line in record.lines() {
+            match line {
+                "FILES" => {
+                    section = "files";
+                    continue;
+                }
+                "END_FILES" => {
+                    section = "";
+                    continue;
+                }
+                "SKILL" => {
+                    section = "skill";
+                    continue;
+                }
+                "END_SKILL" => {
+                    section = "";
+                    continue;
+                }
+                _ => {}
+            }
+
+            match section {
+                "files" => {
+                    if !line.is_empty() {
+                        files.push(line.to_string());
+                    }
+                }
+                "skill" => {
+                    skill_md.push_str(line);
+                    skill_md.push('\n');
+                }
+                _ if line.starts_with("PATH ") => {
+                    linux_path = Some(line[5..].to_string());
+                }
+                _ if line.starts_with("TARGET ") => {
+                    let target = line[7..].trim();
+                    if !target.is_empty() {
+                        target_linux_path = Some(target.to_string());
+                    }
+                }
+                _ if line.starts_with("MTIME ") => {
+                    last_modified_at = line[6..]
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .map(|ts| (ts * 1000.0) as i64);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(linux_path) = linux_path {
+            probes.insert(
+                linux_path,
+                WslSkillProbe {
+                    meta: skill_metadata::parse_frontmatter(&skill_md),
+                    files,
+                    target_linux_path,
+                    last_modified_at,
+                },
+            );
+        }
     }
+    probes
+}
+
+fn wsl_content_hash_from_target(path: &Path, target_linux: Option<&str>) -> Option<String> {
+    let path_str = path.to_string_lossy();
+    let (distro, _) = wsl_unc_to_linux_path(&path_str)?;
+    let target_linux = target_linux?;
     let target_unc = format!(
         r"\\wsl.localhost\{}\{}",
         distro,
@@ -353,30 +404,6 @@ fn wsl_content_hash_via_readlink(distro: &str, linux_path: &str) -> Option<Strin
         content_hash::hash_directory(&target_path).ok()
     } else {
         None
-    }
-}
-
-fn wsl_latest_modified_millis(distro: &str, linux_path: &str) -> Option<i64> {
-    let escaped = wsl_bash_escape(linux_path);
-    let output = std::process::Command::new("wsl.exe")
-        .args([
-            "-d",
-            distro,
-            "-e",
-            "/bin/bash",
-            "-c",
-            &format!(
-                "find -L '{escaped}' -type f \\( -name '.DS_Store' -o -name '.git' \\) -prune -o -type f -printf '%T@\\0' | tr '\\0' '\\n' | sort -rn | head -1"
-            ),
-        ])
-        .output();
-    match output {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let ts: f64 = stdout.parse().ok()?;
-            Some((ts * 1000.0) as i64)
-        }
-        _ => None,
     }
 }
 
@@ -422,8 +449,23 @@ fn read_skills_from_dir_recursive(
     };
 
     let root_is_wsl_unc = sync_engine::is_wsl_unc_path(root);
+    let entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    let wsl_symlink_paths: Vec<PathBuf> = if root_is_wsl_unc {
+        entries
+            .iter()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let is_wsl_symlink =
+                    !path.is_dir() && entry.file_type().ok().map_or(false, |ft| ft.is_symlink());
+                is_wsl_symlink.then_some(path)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let wsl_skill_probes = wsl_probe_symlink_skills(&wsl_symlink_paths);
 
-    for entry in entries.filter_map(|e| e.ok()) {
+    for entry in entries {
         let path = entry.path();
         let file_type = entry.file_type().ok();
 
@@ -431,7 +473,7 @@ fn read_skills_from_dir_recursive(
         let is_wsl_symlink_dir = !is_dir
             && root_is_wsl_unc
             && file_type.as_ref().map_or(false, |ft| ft.is_symlink())
-            && is_wsl_symlink_skill_dir(&path);
+            && wsl_skill_probes.contains_key(&path);
 
         if !is_dir && !is_wsl_symlink_dir {
             continue;
@@ -443,7 +485,17 @@ fn read_skills_from_dir_recursive(
         }
 
         if is_wsl_symlink_dir {
-            push_wsl_symlink_skill_info(root, &path, enabled, agent, agent_display_name, skills);
+            if let Some(probe) = wsl_skill_probes.get(&path) {
+                push_wsl_symlink_skill_info(
+                    root,
+                    &path,
+                    enabled,
+                    agent,
+                    agent_display_name,
+                    skills,
+                    probe,
+                );
+            }
             continue;
         }
 
@@ -751,6 +803,23 @@ mod tests {
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "codex-tool");
+    }
+
+    #[test]
+    fn parses_batched_wsl_skill_probe_output() {
+        let output = "\x1e\nPATH /home/me/.skills/caveman\nTARGET /home/me/.skills-manager/caveman\nMTIME 1710000000.125\nFILES\nSKILL.md\nnotes.txt\nEND_FILES\nSKILL\n---\nname: caveman\ndescription: short words\n---\n# Body\nEND_SKILL\n";
+
+        let probes = super::parse_wsl_skill_probe_output(output);
+        let probe = probes.get("/home/me/.skills/caveman").unwrap();
+
+        assert_eq!(probe.meta.name.as_deref(), Some("caveman"));
+        assert_eq!(probe.meta.description.as_deref(), Some("short words"));
+        assert_eq!(
+            probe.target_linux_path.as_deref(),
+            Some("/home/me/.skills-manager/caveman")
+        );
+        assert_eq!(probe.last_modified_at, Some(1710000000125));
+        assert_eq!(probe.files, vec!["SKILL.md", "notes.txt"]);
     }
 
     #[test]

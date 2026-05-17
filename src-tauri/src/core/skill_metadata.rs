@@ -1,5 +1,6 @@
 use std::path::Path;
 
+#[derive(Debug, Clone)]
 pub struct SkillMeta {
     pub name: Option<String>,
     pub description: Option<String>,
