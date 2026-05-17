@@ -115,8 +115,16 @@ impl ToolAdapter {
     pub fn is_installed(&self) -> bool {
         // Product decision: when users explicitly provide a skills path (override/custom),
         // we treat the tool as available so sync can proceed without probing vendor install state.
-        if self.is_custom || self.override_skills_dir.is_some() {
+        if self.is_custom || (self.override_skills_dir.is_some() && !self.key.starts_with("wsl:")) {
             return true;
+        }
+        if self.key.starts_with("wsl:") {
+            let detect_dir = if self.relative_detect_dir.is_empty() {
+                self.override_skills_dir.as_deref().unwrap_or_default()
+            } else {
+                self.relative_detect_dir.as_str()
+            };
+            return !detect_dir.is_empty() && PathBuf::from(detect_dir).exists();
         }
         Self::candidate_paths(&self.relative_detect_dir)
             .iter()
@@ -744,12 +752,15 @@ fn wsl_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<ToolAd
             let Some(skills_dir) = skills_dir else {
                 continue;
             };
+            let detect_dir =
+                wsl_runtime::resolve_agent_target_path(&runtime, &base.relative_detect_dir)
+                    .unwrap_or_default();
 
             adapters.push(ToolAdapter {
                 key: wsl_runtime::wsl_tool_key(&runtime.distro_name, &base.key),
                 display_name: format!("{} ({})", base.display_name, runtime.distro_name),
                 relative_skills_dir: base.relative_skills_dir.clone(),
-                relative_detect_dir: String::new(),
+                relative_detect_dir: detect_dir,
                 additional_scan_dirs: vec![],
                 override_skills_dir: Some(skills_dir),
                 is_custom: base.is_custom,
@@ -994,6 +1005,7 @@ mod tests {
             wsl_codex.skills_dir().to_string_lossy(),
             r"\\wsl.localhost\Ubuntu\mnt\d\.agents\skills"
         );
+        assert!(!wsl_codex.is_installed());
         assert!(!super::enabled_installed_adapters(&store)
             .iter()
             .any(|adapter| adapter.key == "wsl:Ubuntu:codex"));

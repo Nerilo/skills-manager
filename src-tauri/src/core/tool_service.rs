@@ -378,5 +378,6 @@ mod tests {
             wsl_codex.skills_dir,
             r"\\wsl.localhost\Ubuntu\home\me\.agents\skills"
         );
+        assert!(!wsl_codex.installed);
     }
 }

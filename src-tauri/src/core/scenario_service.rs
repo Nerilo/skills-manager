@@ -502,6 +502,7 @@ mod tests {
         let target_root = tmp.path().join("wsl-agent-skills");
         fs::create_dir_all(&central_skill).unwrap();
         fs::create_dir_all(&replica_skill).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
         fs::write(central_skill.join("SKILL.md"), "# primary").unwrap();
         fs::write(replica_skill.join("SKILL.md"), "# replica").unwrap();
         store.insert_skill(&sample_skill(&central_skill)).unwrap();
@@ -538,6 +539,7 @@ mod tests {
         let replica_root = tmp.path().join("replica");
         let target_root = tmp.path().join("wsl-agent-skills");
         fs::create_dir_all(&central_skill).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
         fs::write(central_skill.join("SKILL.md"), "# primary").unwrap();
 
         store.insert_skill(&sample_skill(&central_skill)).unwrap();

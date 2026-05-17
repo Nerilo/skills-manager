@@ -207,6 +207,7 @@ export function Settings() {
   const [customProjectPath, setCustomProjectPath] = useState("");
   const [addingCustom, setAddingCustom] = useState(false);
   const [showMoreAgents, setShowMoreAgents] = useState(false);
+  const [showMoreWslAgents, setShowMoreWslAgents] = useState(false);
 
   const GITHUB_URL = "https://github.com/xingkongliang/skills-manager";
 
@@ -647,6 +648,16 @@ export function Settings() {
     () => builtInTools.filter((tool) => !MAINSTREAM_AGENT_KEYS.has(tool.key)),
     [builtInTools]
   );
+  const wslCustomTools = useMemo(() => wslTools.filter((tool) => tool.is_custom), [wslTools]);
+  const wslBuiltInTools = useMemo(() => wslTools.filter((tool) => !tool.is_custom), [wslTools]);
+  const wslMainstreamTools = useMemo(
+    () => wslBuiltInTools.filter((tool) => MAINSTREAM_AGENT_KEYS.has(baseAgentKey(tool.key))),
+    [wslBuiltInTools]
+  );
+  const wslSecondaryTools = useMemo(
+    () => wslBuiltInTools.filter((tool) => !MAINSTREAM_AGENT_KEYS.has(baseAgentKey(tool.key))),
+    [wslBuiltInTools]
+  );
 
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -1056,10 +1067,58 @@ export function Settings() {
                   <h3 className="text-[13px] font-medium text-secondary">{t("settings.wslAgentTargetsSection")}</h3>
                   <span className="text-[12px] text-muted">{wslTools.length}</span>
                 </div>
-                <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-                  {wslTools.map((agent) => (
-                    <div key={agent.key}>{renderAgentCard(agent)}</div>
-                  ))}
+                <div className="space-y-3">
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h4 className="text-[13px] font-medium text-secondary">{t("settings.builtInAgents")}</h4>
+                      <span className="text-[12px] text-muted">{wslMainstreamTools.length}</span>
+                    </div>
+                    <AgentGroupDnd
+                      items={wslMainstreamTools}
+                      sensors={dragSensors}
+                      dragLabel={t("settings.dragToReorder")}
+                      onDragEnd={handleAgentDragEnd}
+                      renderAgentCard={renderAgentCard}
+                    />
+                  </div>
+
+                  {wslSecondaryTools.length > 0 && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setShowMoreWslAgents((value) => !value)}
+                        className="mb-2 inline-flex items-center gap-1.5 text-[13px] font-medium text-muted transition-colors hover:text-secondary outline-none"
+                      >
+                        {showMoreWslAgents ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                        {t("settings.moreAgentsSection", { count: wslSecondaryTools.length })}
+                      </button>
+                      {showMoreWslAgents && (
+                        <AgentGroupDnd
+                          items={wslSecondaryTools}
+                          sensors={dragSensors}
+                          dragLabel={t("settings.dragToReorder")}
+                          onDragEnd={handleAgentDragEnd}
+                          renderAgentCard={renderAgentCard}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {wslCustomTools.length > 0 && (
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <h4 className="text-[13px] font-medium text-secondary">{t("settings.customAgentsSection")}</h4>
+                        <span className="text-[12px] text-muted">{wslCustomTools.length}</span>
+                      </div>
+                      <AgentGroupDnd
+                        items={wslCustomTools}
+                        sensors={dragSensors}
+                        dragLabel={t("settings.dragToReorder")}
+                        onDragEnd={handleAgentDragEnd}
+                        renderAgentCard={renderAgentCard}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
