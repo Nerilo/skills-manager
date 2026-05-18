@@ -13,6 +13,7 @@ import {
   getSkillDocument,
   getSourceSkillDocument,
   type ManagedSkill,
+  type Project,
   type SkillDocument,
   type SourceSkillDocument,
   type SkillToolToggle,
@@ -22,6 +23,7 @@ import { DocumentDiffViewer } from "./DocumentDiffViewer";
 import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
 import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
+import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SyncDots } from "./SyncDots";
 
 interface Props {
@@ -31,6 +33,8 @@ interface Props {
   toolToggles?: SkillToolToggle[] | null;
   togglingTool?: string | null;
   onToggleTool?: (tool: string, enabled: boolean) => void;
+  projects?: Project[];
+  onProjectsChanged?: () => void;
 }
 
 export function SkillDetailPanel({
@@ -40,6 +44,8 @@ export function SkillDetailPanel({
   toolToggles,
   togglingTool,
   onToggleTool,
+  projects,
+  onProjectsChanged,
 }: Props) {
   if (!skill) return null;
 
@@ -61,6 +67,8 @@ export function SkillDetailPanel({
       toolToggles={toolToggles}
       togglingTool={togglingTool}
       onToggleTool={onToggleTool}
+      projects={projects}
+      onProjectsChanged={onProjectsChanged}
     />
   );
 }
@@ -72,6 +80,8 @@ function SkillDetailPanelContent({
   toolToggles,
   togglingTool,
   onToggleTool,
+  projects,
+  onProjectsChanged,
 }: {
   skill: ManagedSkill;
   onClose: () => void;
@@ -79,6 +89,8 @@ function SkillDetailPanelContent({
   toolToggles?: SkillToolToggle[] | null;
   togglingTool?: string | null;
   onToggleTool?: (tool: string, enabled: boolean) => void;
+  projects?: Project[];
+  onProjectsChanged?: () => void;
 }) {
   const { t } = useTranslation();
   const [doc, setDoc] = useState<SkillDocument | null>(null);
@@ -284,6 +296,14 @@ function SkillDetailPanelContent({
           togglingKey={togglingTool}
           onToggle={onToggleTool}
           className="mb-4"
+        />
+      )}
+
+      {projects && projects.length > 0 && (
+        <SkillProjectsSection
+          skill={skill}
+          projects={projects}
+          onChanged={onProjectsChanged}
         />
       )}
 

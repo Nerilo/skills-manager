@@ -136,6 +136,8 @@ export function MySkills() {
     detailSkillId,
     openSkillDetailById,
     closeSkillDetail,
+    projects,
+    refreshProjects,
   } = useApp();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
@@ -1885,6 +1887,8 @@ export function MySkills() {
         toolToggles={toolToggles}
         togglingTool={togglingToolKey}
         onToggleTool={handleToggleSkillTool}
+        projects={projects}
+        onProjectsChanged={refreshProjects}
       />
 
       <ConfirmDialog

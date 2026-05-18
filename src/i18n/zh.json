@@ -579,7 +579,43 @@
     "save": "保存",
     "create": "创建",
     "search": "搜索",
-    "goToSettings": "设置"
+    "goToSettings": "设置",
+    "expandAll": "展开全部",
+    "collapse": "收起"
+  },
+  "addFromLibrary": {
+    "title": "从技能库添加",
+    "targetLabel": "目标：",
+    "noTargetSelected": "未选择",
+    "changeTarget": "更换目标",
+    "searchPlaceholder": "搜索技能库…",
+    "emptyLibrary": "技能库为空",
+    "emptyMatch": "没有匹配的 Skill",
+    "ctaEmpty": "选择要添加到 {{agent}} 的 Skill",
+    "ctaEmptyProject": "选择要添加的 Skill（{{count}} 个 Agent）",
+    "ctaGlobal": "添加 {{count}} 个到 {{agent}}",
+    "ctaProject": "添加 {{count}} 个 · {{agentCount}} 个 Agent",
+    "ctaNoTarget": "请先选择目标 Agent",
+    "toastInstalled": "已添加 {{count}} 个 Skill",
+    "toastFailed": "有 {{count}} 个 Skill 添加失败",
+    "toastAddedToProject": "已将“{{skill}}”添加到 {{project}}",
+    "add": "添加",
+    "installedShort": "已添加",
+    "projectsTitle": "项目",
+    "projectsSummary": "{{installed}} / {{total}} 已添加",
+    "errors": {
+      "noTarget": "请至少选择一个目标 Agent"
+    },
+    "status": {
+      "installed": "已添加",
+      "conflict": "名称冲突",
+      "unavailable": "无目标"
+    },
+    "tooltip": {
+      "installed": "已经在工作区中",
+      "conflict": "请先重命名库中的 Skill",
+      "unavailable": "请先选择目标 Agent"
+    }
   },
   "preset": {
     "create": "新建 Preset",

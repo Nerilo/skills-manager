@@ -520,7 +520,43 @@
     "rename": "重新命名",
     "save": "儲存",
     "create": "建立",
-    "goToSettings": "設定"
+    "goToSettings": "設定",
+    "expandAll": "展開全部",
+    "collapse": "收合"
+  },
+  "addFromLibrary": {
+    "title": "從技能庫新增",
+    "targetLabel": "目標：",
+    "noTargetSelected": "未選擇",
+    "changeTarget": "更換目標",
+    "searchPlaceholder": "搜尋技能庫…",
+    "emptyLibrary": "技能庫為空",
+    "emptyMatch": "沒有符合的 Skill",
+    "ctaEmpty": "選擇要新增到 {{agent}} 的 Skill",
+    "ctaEmptyProject": "選擇要新增的 Skill（{{count}} 個 Agent）",
+    "ctaGlobal": "新增 {{count}} 個到 {{agent}}",
+    "ctaProject": "新增 {{count}} 個 · {{agentCount}} 個 Agent",
+    "ctaNoTarget": "請先選擇目標 Agent",
+    "toastInstalled": "已新增 {{count}} 個 Skill",
+    "toastFailed": "有 {{count}} 個 Skill 新增失敗",
+    "toastAddedToProject": "已將「{{skill}}」新增到 {{project}}",
+    "add": "新增",
+    "installedShort": "已新增",
+    "projectsTitle": "專案",
+    "projectsSummary": "{{installed}} / {{total}} 已新增",
+    "errors": {
+      "noTarget": "請至少選擇一個目標 Agent"
+    },
+    "status": {
+      "installed": "已新增",
+      "conflict": "名稱衝突",
+      "unavailable": "無目標"
+    },
+    "tooltip": {
+      "installed": "已經在工作區中",
+      "conflict": "請先重新命名庫中的 Skill",
+      "unavailable": "請先選擇目標 Agent"
+    }
   },
   "preset": {
     "create": "新增 Preset",

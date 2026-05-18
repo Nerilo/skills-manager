@@ -579,7 +579,43 @@
     "save": "Save",
     "create": "Create",
     "search": "Search",
-    "goToSettings": "Settings"
+    "goToSettings": "Settings",
+    "expandAll": "Show all",
+    "collapse": "Collapse"
+  },
+  "addFromLibrary": {
+    "title": "Add from Library",
+    "targetLabel": "Target:",
+    "noTargetSelected": "no target",
+    "changeTarget": "Change target",
+    "searchPlaceholder": "Search the library…",
+    "emptyLibrary": "Your library is empty",
+    "emptyMatch": "No skills match",
+    "ctaEmpty": "Pick skills to add to {{agent}}",
+    "ctaEmptyProject": "Pick skills to add ({{count}} agents)",
+    "ctaGlobal": "Add {{count}} to {{agent}}",
+    "ctaProject": "Add {{count}} · {{agentCount}} agents",
+    "ctaNoTarget": "Select target agents first",
+    "toastInstalled": "{{count}} skill(s) added",
+    "toastFailed": "{{count}} skill(s) failed to add",
+    "toastAddedToProject": "Added \"{{skill}}\" to {{project}}",
+    "add": "Add",
+    "installedShort": "Added",
+    "projectsTitle": "Projects",
+    "projectsSummary": "{{installed}} / {{total}} installed",
+    "errors": {
+      "noTarget": "Select at least one target agent"
+    },
+    "status": {
+      "installed": "Installed",
+      "conflict": "Name conflict",
+      "unavailable": "No target"
+    },
+    "tooltip": {
+      "installed": "Already in the workspace",
+      "conflict": "Rename the skill in your library first",
+      "unavailable": "Select a target agent first"
+    }
   },
   "preset": {
     "create": "New Preset",
