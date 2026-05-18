@@ -7,9 +7,9 @@ pub mod core;
 
 /// Shared flag: when true, CloseRequested should NOT be prevented.
 pub static QUITTING: AtomicBool = AtomicBool::new(false);
-static TRAY_SCENARIO_SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static TRAY_PRESET_SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const MAIN_TRAY_ID: &str = "main-tray";
-const TRAY_SCENARIO_ITEM_PREFIX: &str = "tray-scenario:";
+const TRAY_PRESET_ITEM_PREFIX: &str = "tray-preset:";
 #[cfg(target_os = "macos")]
 const CUSTOM_TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray/tray-icon-32.png");
 #[cfg(not(target_os = "macos"))]
@@ -85,12 +85,12 @@ fn load_custom_tray_icon() -> Option<tauri::image::Image<'static>> {
     ))
 }
 
-fn tray_scenario_item_id(scenario_id: &str) -> String {
-    format!("{TRAY_SCENARIO_ITEM_PREFIX}{scenario_id}")
+fn tray_preset_item_id(preset_id: &str) -> String {
+    format!("{TRAY_PRESET_ITEM_PREFIX}{preset_id}")
 }
 
-fn scenario_id_from_tray_item(menu_id: &str) -> Option<&str> {
-    menu_id.strip_prefix(TRAY_SCENARIO_ITEM_PREFIX)
+fn preset_id_from_tray_item(menu_id: &str) -> Option<&str> {
+    menu_id.strip_prefix(TRAY_PRESET_ITEM_PREFIX)
 }
 
 fn build_tray_menu<R: tauri::Runtime>(
@@ -113,7 +113,7 @@ fn build_tray_menu<R: tauri::Runtime>(
     });
     let active_label = MenuItem::with_id(
         app,
-        "tray-active-scenario",
+        "tray-active-preset",
         format!("Current: {}", active_name.unwrap_or("None")),
         false,
         None::<&str>,
@@ -123,22 +123,17 @@ fn build_tray_menu<R: tauri::Runtime>(
     let first_separator = PredefinedMenuItem::separator(app)?;
     menu.append(&first_separator)?;
 
-    let scenario_submenu = Submenu::new(app, "Switch Scenario", true)?;
+    let scenario_submenu = Submenu::new(app, "Switch Preset", true)?;
     if scenarios.is_empty() {
-        let empty_item = MenuItem::with_id(
-            app,
-            "tray-no-scenarios",
-            "No scenarios",
-            false,
-            None::<&str>,
-        )?;
+        let empty_item =
+            MenuItem::with_id(app, "tray-no-presets", "No presets", false, None::<&str>)?;
         scenario_submenu.append(&empty_item)?;
     } else {
         for scenario in scenarios {
             let checked = active_id.as_deref() == Some(scenario.id.as_str());
             let scenario_item = CheckMenuItem::with_id(
                 app,
-                tray_scenario_item_id(&scenario.id),
+                tray_preset_item_id(&scenario.id),
                 scenario.name,
                 true,
                 checked,
@@ -174,43 +169,43 @@ pub(crate) fn refresh_tray_menu<R: tauri::Runtime>(
     tray.set_menu(Some(menu)).map_err(|e| e.to_string())
 }
 
-fn switch_scenario_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>, scenario_id: &str) {
+fn switch_preset_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>, preset_id: &str) {
     let store = app
         .state::<Arc<core::skill_store::SkillStore>>()
         .inner()
         .clone();
     let app = app.clone();
-    let scenario_id = scenario_id.to_string();
+    let preset_id = preset_id.to_string();
 
     tauri::async_runtime::spawn(async move {
         let store_for_task = store.clone();
-        let scenario_id_for_task = scenario_id.clone();
+        let preset_id_for_task = preset_id.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
-            let _switch_guard = TRAY_SCENARIO_SWITCH_LOCK
+            let _switch_guard = TRAY_PRESET_SWITCH_LOCK
                 .lock()
-                .map_err(|_| "Tray scenario switch lock poisoned".to_string())?;
+                .map_err(|_| "Tray preset switch lock poisoned".to_string())?;
             let scenario_exists = store_for_task
                 .get_all_scenarios()
                 .map_err(|e| e.to_string())?
                 .iter()
-                .any(|scenario| scenario.id == scenario_id_for_task);
+                .any(|scenario| scenario.id == preset_id_for_task);
             if !scenario_exists {
-                return Err("Scenario not found".to_string());
+                return Err("Preset not found".to_string());
             }
             let current_active = store_for_task
                 .get_active_scenario_id()
                 .map_err(|e| e.to_string())?;
-            if current_active.as_deref() == Some(&scenario_id_for_task) {
+            if current_active.as_deref() == Some(&preset_id_for_task) {
                 return Ok(false);
             }
             if let Some(old_id) = current_active.as_deref() {
-                commands::scenarios::unsync_scenario_skills(&store_for_task, old_id)
+                commands::presets::unsync_scenario_skills(&store_for_task, old_id)
                     .map_err(|e| e.to_string())?;
             }
             store_for_task
-                .set_active_scenario(&scenario_id_for_task)
+                .set_active_scenario(&preset_id_for_task)
                 .map_err(|e| e.to_string())?;
-            commands::scenarios::sync_scenario_skills(&store_for_task, &scenario_id_for_task)
+            commands::presets::sync_scenario_skills(&store_for_task, &preset_id_for_task)
                 .map_err(|e| e.to_string())?;
             Ok::<bool, String>(true)
         })
@@ -220,15 +215,15 @@ fn switch_scenario_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>, scena
             Ok(Ok(changed)) => {
                 if changed {
                     if let Err(err) = refresh_tray_menu(&app) {
-                        log::warn!("Failed to refresh tray menu after tray scenario switch: {err}");
+                        log::warn!("Failed to refresh tray menu after tray preset switch: {err}");
                     }
-                    if let Err(err) = app.emit("tray-scenario-switched", scenario_id) {
-                        log::warn!("Failed to emit tray-scenario-switched: {err}");
+                    if let Err(err) = app.emit("tray-preset-switched", preset_id) {
+                        log::warn!("Failed to emit tray-preset-switched: {err}");
                     }
                 }
             }
-            Ok(Err(err)) => log::error!("Failed to switch scenario from tray: {err}"),
-            Err(err) => log::error!("Scenario switch task panicked: {err}"),
+            Ok(Err(err)) => log::error!("Failed to switch preset from tray: {err}"),
+            Err(err) => log::error!("Preset switch task panicked: {err}"),
         }
     });
 }
@@ -259,9 +254,9 @@ fn ensure_tray_icon(app: &tauri::AppHandle) -> tauri::Result<()> {
                 request_quit(app)
             }
             id => {
-                if let Some(scenario_id) = scenario_id_from_tray_item(id) {
-                    log::debug!("Tray menu clicked: switch scenario to {scenario_id}");
-                    switch_scenario_from_tray(app, scenario_id);
+                if let Some(preset_id) = preset_id_from_tray_item(id) {
+                    log::debug!("Tray menu clicked: switch preset to {preset_id}");
+                    switch_preset_from_tray(app, preset_id);
                 }
             }
         });
@@ -421,7 +416,7 @@ pub fn run() {
             commands::tools::remove_custom_tool,
             // Skills
             commands::skills::get_managed_skills,
-            commands::skills::get_skills_for_scenario,
+            commands::skills::get_skills_for_preset,
             commands::skills::get_skill_document,
             commands::skills::get_source_skill_document,
             commands::skills::delete_managed_skill,
@@ -456,7 +451,6 @@ pub fn run() {
             // Browse
             commands::browse::fetch_leaderboard,
             commands::browse::search_skillssh,
-            commands::browse::search_skillsmp,
             // Settings
             commands::settings::get_settings,
             commands::settings::set_settings,
@@ -509,20 +503,20 @@ pub fn run() {
             commands::agent_workspace::get_global_local_skill_document,
             commands::agent_workspace::import_global_local_skill_to_center,
             commands::agent_workspace::update_global_local_skill_from_center,
-            // Scenarios
-            commands::scenarios::get_scenarios,
-            commands::scenarios::get_active_scenario,
-            commands::scenarios::create_scenario,
-            commands::scenarios::update_scenario,
-            commands::scenarios::delete_scenario,
-            commands::scenarios::switch_scenario,
-            commands::scenarios::apply_scenario_to_default,
-            commands::scenarios::add_skill_to_scenario,
-            commands::scenarios::remove_skill_from_scenario,
-            commands::scenarios::reorder_scenarios,
+            // Presets
+            commands::presets::get_presets,
+            commands::presets::get_active_preset,
+            commands::presets::create_preset,
+            commands::presets::update_preset,
+            commands::presets::delete_preset,
+            commands::presets::switch_preset,
+            commands::presets::apply_preset_to_default,
+            commands::presets::add_skill_to_preset,
+            commands::presets::remove_skill_from_preset,
+            commands::presets::reorder_presets,
             commands::projects::reorder_projects,
-            commands::scenarios::get_scenario_skill_order,
-            commands::scenarios::reorder_scenario_skills,
+            commands::presets::get_preset_skill_order,
+            commands::presets::reorder_preset_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

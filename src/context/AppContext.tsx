@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { ManagedSkill, Project, Scenario, ToolInfo } from "../lib/tauri";
+import type { ManagedSkill, Project, Preset, ToolInfo } from "../lib/tauri";
 import type { WslRuntimeEnvironment } from "../lib/wsl";
 import * as api from "../lib/tauri";
 import i18n from "../i18n";
@@ -11,11 +11,11 @@ import { toast } from "sonner";
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
 
 interface AppState {
-  scenarios: Scenario[];
+  presets: Preset[];
   /** Backend-tracked "last applied to default targets". Drives the "Applied to..." status, not the sidebar selection. */
-  activeScenario: Scenario | null;
-  /** Frontend-only "currently being viewed/edited" scenario. Persisted to localStorage. UI selection. */
-  viewedScenario: Scenario | null;
+  activePreset: Preset | null;
+  /** Frontend-only "currently being viewed/edited" preset. Persisted to localStorage. UI selection. */
+  viewedPreset: Preset | null;
   tools: ToolInfo[];
   wslRuntimes: WslRuntimeEnvironment[];
   managedSkills: ManagedSkill[];
@@ -25,13 +25,13 @@ interface AppState {
   helpOpen: boolean;
   detailSkillId: string | null;
   refreshAppData: () => Promise<void>;
-  refreshScenarios: () => Promise<void>;
+  refreshPresets: () => Promise<void>;
   refreshTools: () => Promise<void>;
   refreshWslRuntimes: () => Promise<void>;
   refreshManagedSkills: () => Promise<void>;
   refreshProjects: () => Promise<void>;
-  setViewedScenarioId: (id: string) => void;
-  applyScenarioToDefault: (id: string) => Promise<void>;
+  setViewedPresetId: (id: string) => void;
+  applyPresetToDefault: (id: string) => Promise<void>;
   clearAppError: () => void;
   openHelp: () => void;
   closeHelp: () => void;
@@ -39,17 +39,18 @@ interface AppState {
   closeSkillDetail: () => void;
 }
 
-const VIEWED_SCENARIO_LS_KEY = "skills-manager.viewedScenarioId";
+const VIEWED_PRESET_LS_KEY = "skills-manager.viewedPresetId";
+const LEGACY_VIEWED_PRESET_LS_KEY = "skills-manager.viewedScenarioId";
 
 const AppContext = createContext<AppState | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const SKILL_UPDATE_TOAST_ID = "skill-update-available";
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
-  const [viewedScenarioId, setViewedScenarioIdState] = useState<string | null>(() => {
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [activePreset, setActivePreset] = useState<Preset | null>(null);
+  const [viewedPresetId, setViewedPresetIdState] = useState<string | null>(() => {
     try {
-      return localStorage.getItem(VIEWED_SCENARIO_LS_KEY);
+      return localStorage.getItem(VIEWED_PRESET_LS_KEY) || localStorage.getItem(LEGACY_VIEWED_PRESET_LS_KEY);
     } catch {
       return null;
     }
@@ -64,23 +65,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const autoCheckInFlightRef = useRef(false);
   const lastUpdateNotificationRef = useRef<string | null>(null);
+  const lastActivePresetIdRef = useRef<string | null>(null);
 
   const setTranslatedError = useCallback((key: string) => {
     setAppError(i18n.t("common.loadFailed", { item: i18n.t(key) }));
   }, []);
 
-  const refreshScenarios = useCallback(async () => {
+  const refreshPresets = useCallback(async () => {
     try {
       const [s, active] = await Promise.all([
-        api.getScenarios(),
-        api.getActiveScenario(),
+        api.getPresets(),
+        api.getActivePreset(),
       ]);
-      setScenarios(s);
-      setActiveScenario(active);
+      setPresets(s);
+      setActivePreset(active);
+      const previousActiveId = lastActivePresetIdRef.current;
+      const nextActiveId = active?.id ?? null;
+      if (previousActiveId !== nextActiveId) {
+        lastActivePresetIdRef.current = nextActiveId;
+        // Carry the sidebar along only when the user was viewing the old
+        // active preset — that way an external switch (CLI/tray) follows,
+        // but a user who's browsing some other preset isn't yanked away.
+        // Skip the initial load (previousActiveId === null) entirely so a
+        // persisted viewedPreset from localStorage isn't clobbered.
+        if (nextActiveId && previousActiveId !== null) {
+          setViewedPresetIdState((current) => {
+            if (current !== previousActiveId) return current;
+            try {
+              localStorage.setItem(VIEWED_PRESET_LS_KEY, nextActiveId);
+            } catch {
+              // localStorage may be unavailable; selection is still tracked in memory.
+            }
+            return nextActiveId;
+          });
+        }
+      }
       setAppError(null);
     } catch (e) {
-      console.error("Failed to load scenarios:", e);
-      setTranslatedError("common.scenarios");
+      console.error("Failed to load presets:", e);
+      setTranslatedError("common.presets");
     }
   }, [setTranslatedError]);
 
@@ -134,54 +157,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshAppData = useCallback(async () => {
     setLoading(true);
     await Promise.all([
-      refreshScenarios(),
+      refreshPresets(),
       refreshTools(),
       refreshWslRuntimes(),
       refreshManagedSkills(),
       refreshProjects(),
     ]);
     setLoading(false);
-  }, [refreshManagedSkills, refreshProjects, refreshScenarios, refreshTools, refreshWslRuntimes]);
+  }, [refreshManagedSkills, refreshProjects, refreshPresets, refreshTools, refreshWslRuntimes]);
 
-  const setViewedScenarioId = useCallback((id: string) => {
-    setViewedScenarioIdState(id);
+  const setViewedPresetId = useCallback((id: string) => {
+    setViewedPresetIdState(id);
     try {
-      localStorage.setItem(VIEWED_SCENARIO_LS_KEY, id);
+      localStorage.setItem(VIEWED_PRESET_LS_KEY, id);
     } catch {
       // localStorage may be unavailable; selection is still tracked in memory.
     }
   }, []);
 
-  const handleApplyScenarioToDefault = useCallback(
+  const handleApplyPresetToDefault = useCallback(
     async (id: string) => {
-      await api.applyScenarioToDefault(id);
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+      await api.applyPresetToDefault(id);
+      await Promise.all([refreshPresets(), refreshManagedSkills()]);
     },
-    [refreshManagedSkills, refreshScenarios]
+    [refreshManagedSkills, refreshPresets]
   );
 
-  // Resolve viewedScenario: persisted id > activeScenario > first scenario.
+  // Resolve viewedPreset: persisted id > activePreset > first preset.
   // Persist whichever resolves so the next launch matches what the user saw.
-  const viewedScenario = (() => {
-    if (viewedScenarioId) {
-      const found = scenarios.find((s) => s.id === viewedScenarioId);
+  const viewedPreset = (() => {
+    if (viewedPresetId) {
+      const found = presets.find((s) => s.id === viewedPresetId);
       if (found) return found;
     }
-    return activeScenario ?? scenarios[0] ?? null;
+    return activePreset ?? presets[0] ?? null;
   })();
 
   useEffect(() => {
-    if (!viewedScenario) return;
-    if (viewedScenario.id !== viewedScenarioId) {
+    if (!viewedPreset) return;
+    if (viewedPreset.id !== viewedPresetId) {
       // Persist the resolved fallback so subsequent reads are stable.
-      setViewedScenarioIdState(viewedScenario.id);
+      setViewedPresetIdState(viewedPreset.id);
       try {
-        localStorage.setItem(VIEWED_SCENARIO_LS_KEY, viewedScenario.id);
+        localStorage.setItem(VIEWED_PRESET_LS_KEY, viewedPreset.id);
       } catch {
         // ignore
       }
     }
-  }, [viewedScenario, viewedScenarioId]);
+  }, [viewedPreset, viewedPresetId]);
 
   useEffect(() => {
     async function init() {
@@ -196,18 +219,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refreshAppData]);
 
   useEffect(() => {
-    const unlistenPromise = listen<string>("tray-scenario-switched", async () => {
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+    const unlistenPromise = listen<string>("tray-preset-switched", async () => {
+      await Promise.all([refreshPresets(), refreshManagedSkills()]);
     });
 
     return () => {
       unlistenPromise
         .then((unlisten) => unlisten())
         .catch((error) => {
-          console.error("Failed to unlisten tray-scenario-switched:", error);
+          console.error("Failed to unlisten tray-preset-switched:", error);
         });
     };
-  }, [refreshManagedSkills, refreshScenarios]);
+  }, [refreshManagedSkills, refreshPresets]);
 
   useEffect(() => {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -301,9 +324,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider
       value={{
-        scenarios,
-        activeScenario,
-        viewedScenario,
+        presets,
+        activePreset,
+        viewedPreset,
         tools,
         wslRuntimes,
         managedSkills,
@@ -313,13 +336,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         helpOpen,
         detailSkillId,
         refreshAppData,
-        refreshScenarios,
+        refreshPresets,
         refreshTools,
         refreshWslRuntimes,
         refreshManagedSkills,
         refreshProjects,
-        setViewedScenarioId,
-        applyScenarioToDefault: handleApplyScenarioToDefault,
+        setViewedPresetId,
+        applyPresetToDefault: handleApplyPresetToDefault,
         clearAppError: () => setAppError(null),
         openHelp: () => setHelpOpen(true),
         closeHelp: () => setHelpOpen(false),

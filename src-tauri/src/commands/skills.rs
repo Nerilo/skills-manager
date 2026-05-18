@@ -60,7 +60,7 @@ pub struct ManagedSkillDto {
     pub updated_at: i64,
     pub status: String,
     pub targets: Vec<TargetDto>,
-    pub scenario_ids: Vec<String>,
+    pub preset_ids: Vec<String>,
     pub tags: Vec<String>,
 }
 
@@ -93,23 +93,23 @@ pub struct SourceSkillDocumentDto {
 }
 
 #[derive(Debug, Clone)]
-struct InstallSourceMetadata {
-    source_type: String,
-    source_ref: Option<String>,
-    source_ref_resolved: Option<String>,
-    source_subpath: Option<String>,
-    source_branch: Option<String>,
-    source_revision: Option<String>,
-    remote_revision: Option<String>,
-    update_status: String,
+pub struct InstallSourceMetadata {
+    pub source_type: String,
+    pub source_ref: Option<String>,
+    pub source_ref_resolved: Option<String>,
+    pub source_subpath: Option<String>,
+    pub source_branch: Option<String>,
+    pub source_revision: Option<String>,
+    pub remote_revision: Option<String>,
+    pub update_status: String,
 }
 
 #[derive(Debug, Clone)]
-struct GitSkillSource {
-    clone_url: String,
-    branch: Option<String>,
-    subpath: Option<String>,
-    locator_skill_id: Option<String>,
+pub struct GitSkillSource {
+    pub clone_url: String,
+    pub branch: Option<String>,
+    pub subpath: Option<String>,
+    pub locator_skill_id: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -167,14 +167,14 @@ pub async fn get_managed_skills(
 }
 
 #[tauri::command]
-pub async fn get_skills_for_scenario(
-    scenario_id: String,
+pub async fn get_skills_for_preset(
+    preset_id: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<ManagedSkillDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let skills = store
-            .get_skills_for_scenario(&scenario_id)
+            .get_skills_for_scenario(&preset_id)
             .map_err(AppError::db)?;
         let all_targets = store.get_all_targets().map_err(AppError::db)?;
         let tags_map = store.get_tags_map().map_err(AppError::db)?;
@@ -354,7 +354,7 @@ pub async fn delete_managed_skills(
         .await?
 }
 
-fn delete_managed_skills_by_ids(
+pub fn delete_managed_skills_by_ids(
     store: &SkillStore,
     skill_ids: &[String],
 ) -> Result<BatchDeleteSkillsResult, AppError> {
@@ -1042,7 +1042,7 @@ fn managed_skill_to_dto(
         })
         .collect();
 
-    let scenario_ids = store.get_scenarios_for_skill(&skill.id).unwrap_or_default();
+    let preset_ids = store.get_scenarios_for_skill(&skill.id).unwrap_or_default();
     let tags = tags_map.get(&skill.id).cloned().unwrap_or_default();
 
     // Prefer description from SKILL.md so the list view reflects edits made
@@ -1074,12 +1074,15 @@ fn managed_skill_to_dto(
         updated_at: skill.updated_at,
         status: skill.status,
         targets,
-        scenario_ids,
+        preset_ids,
         tags,
     }
 }
 
-fn managed_skill_by_id(store: &SkillStore, skill_id: &str) -> Result<ManagedSkillDto, AppError> {
+pub fn managed_skill_by_id(
+    store: &SkillStore,
+    skill_id: &str,
+) -> Result<ManagedSkillDto, AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
@@ -1089,7 +1092,7 @@ fn managed_skill_by_id(store: &SkillStore, skill_id: &str) -> Result<ManagedSkil
     Ok(managed_skill_to_dto(store, skill, &all_targets, &tags_map))
 }
 
-fn update_git_skill_internal(
+pub fn update_git_skill_internal(
     store: &SkillStore,
     skill_id: &str,
     proxy_url: Option<&str>,
@@ -1218,7 +1221,7 @@ fn update_git_skill_internal(
     }
 }
 
-fn reimport_local_skill_internal(
+pub fn reimport_local_skill_internal(
     store: &SkillStore,
     skill_id: &str,
 ) -> Result<ManagedSkillDto, AppError> {
@@ -1286,7 +1289,7 @@ fn reimport_local_skill_internal(
     }
 }
 
-fn store_installed_skill_unlocked(
+pub fn store_installed_skill_unlocked(
     store: &SkillStore,
     result: &installer::InstallResult,
     metadata: &InstallSourceMetadata,
@@ -1324,9 +1327,9 @@ fn store_installed_skill_unlocked(
 
         if let Some(scenario_id) = active_scenario_id {
             if let Err(e) =
-                super::scenarios::sync_skill_to_active_scenario(store, scenario_id, &existing.id)
+                super::presets::sync_skill_to_active_preset(store, scenario_id, &existing.id)
             {
-                log::warn!("Failed to sync reinstalled skill to scenario: {e}");
+                log::warn!("Failed to sync reinstalled skill to preset: {e}");
             }
         }
 
@@ -1366,15 +1369,15 @@ fn store_installed_skill_unlocked(
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
 
     if let Some(scenario_id) = active_scenario_id {
-        if let Err(e) = super::scenarios::sync_skill_to_active_scenario(store, scenario_id, &id) {
-            log::warn!("Failed to sync newly installed skill to scenario: {e}");
+        if let Err(e) = super::presets::sync_skill_to_active_preset(store, scenario_id, &id) {
+            log::warn!("Failed to sync newly installed skill to preset: {e}");
         }
     }
 
     Ok(id)
 }
 
-fn check_skill_update_internal(
+pub fn check_skill_update_internal(
     store: &SkillStore,
     skill_id: &str,
     force: bool,
@@ -1507,7 +1510,7 @@ fn should_skip_update_check(
             .unwrap_or(false))
 }
 
-fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppError> {
+pub fn git_source_from_skill(skill: &SkillRecord) -> Result<GitSkillSource, AppError> {
     if let Some(resolved) = &skill.source_ref_resolved {
         return Ok(GitSkillSource {
             clone_url: resolved.clone(),
@@ -1569,7 +1572,7 @@ fn skill_ssh_id(skill: &SkillRecord) -> Option<String> {
 /// If `skill_dir` is itself a valid skill, returns `[skill_dir]`.
 /// Otherwise recursively walks for skill dirs (e.g. `category/<skill>` layouts).
 /// Returns an empty Vec when nothing is found — callers must handle that.
-fn collect_git_skill_dirs(skill_dir: &Path) -> Vec<PathBuf> {
+pub fn collect_git_skill_dirs(skill_dir: &Path) -> Vec<PathBuf> {
     if is_valid_skill_dir(skill_dir) {
         return vec![skill_dir.to_path_buf()];
     }
@@ -1580,7 +1583,7 @@ fn collect_git_skill_dirs(skill_dir: &Path) -> Vec<PathBuf> {
 
 /// Stable identifier for a discovered skill within a preview/confirm cycle.
 /// Uses forward slashes regardless of platform so the frontend sees consistent keys.
-fn skill_rel_key(skill_dir: &Path, dir: &Path) -> String {
+pub fn skill_rel_key(skill_dir: &Path, dir: &Path) -> String {
     let rel = dir.strip_prefix(skill_dir).unwrap_or(dir);
     if rel.as_os_str().is_empty() {
         dir.file_name()
@@ -1593,7 +1596,7 @@ fn skill_rel_key(skill_dir: &Path, dir: &Path) -> String {
 
 /// Validate and canonicalize a temp directory path used by the git preview/install flow.
 /// Returns the canonicalized path if it passes security checks.
-fn validate_clone_temp_path(temp_dir: &str) -> Result<PathBuf, AppError> {
+pub fn validate_clone_temp_path(temp_dir: &str) -> Result<PathBuf, AppError> {
     let raw_path = PathBuf::from(temp_dir);
     if !raw_path.exists() {
         return Err(AppError::invalid_input(
@@ -1622,7 +1625,7 @@ fn validate_clone_temp_path(temp_dir: &str) -> Result<PathBuf, AppError> {
     Err(AppError::invalid_input("Invalid temp directory"))
 }
 
-fn resolve_skill_dir(
+pub fn resolve_skill_dir(
     repo_dir: &Path,
     subpath: Option<&str>,
     skill_id: Option<&str>,
@@ -1637,7 +1640,7 @@ fn resolve_skill_dir(
     git_fetcher::find_skill_dir(repo_dir, skill_id).map_err(AppError::git)
 }
 
-fn resolve_skillssh_install_target(
+pub fn resolve_skillssh_install_target(
     store: &SkillStore,
     source_ref: &str,
     skill_id: &str,
@@ -1676,7 +1679,7 @@ fn resolve_skillssh_install_target(
     }
 }
 
-fn staged_path_for(central_path: &str) -> PathBuf {
+pub fn staged_path_for(central_path: &str) -> PathBuf {
     let path = PathBuf::from(central_path);
     let file_name = path
         .file_name()
@@ -1685,7 +1688,7 @@ fn staged_path_for(central_path: &str) -> PathBuf {
     path.with_file_name(format!(".{file_name}.staged-{}", uuid::Uuid::new_v4()))
 }
 
-fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), AppError> {
+pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), AppError> {
     let backup_path = current_path.with_file_name(format!(
         ".{}.backup-{}",
         current_path
@@ -1711,7 +1714,7 @@ fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), A
     Ok(())
 }
 
-fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppError> {
+pub fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?

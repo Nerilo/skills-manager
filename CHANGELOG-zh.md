@@ -5,6 +5,30 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.20.0] - 2026-05-18
+
+### 新增
+- **`skills-manager-cli` 写命令** —— CLI 现在可以让 Agent 完整管理 skills：`install`（本地路径 / git URL / `owner/repo[@skill]` 简写）、`update`、`check`、`remove`、`sync`、`search`（skills.sh 市场，无需 API Key）、`adopt`（把 Agent 目录里已存在的 skill 收编进中央库）、`tag add/remove/list`。所有命令支持 `--json`；`remove` / `sync` / `adopt` 支持 `--dry-run`；`remove` 必须显式带 `--yes`。
+- **`presets add-skill` / `remove-skill` CLI 命令** —— 在命令行管理 preset 包含哪些 skill。
+- **`presets deactivate` CLI 命令**（别名 `close` / `stop` / `off` / `disable`）—— 关闭一个 preset 并撤销其同步目标。如果关闭的是当前激活 preset，会自动应用替代 preset；如果不是，会重新同步当前激活 preset，确保两边共用的 skill 仍然在 Agent 目录里。
+- **`manage-skills` skill**（`assets/manage-skills/SKILL.md`）—— 放入 `~/.claude/skills/` 后，Claude Code（及其它 Agent）会优先用 `skills-manager-cli`，而不是直接往某一个 Agent 目录里装 skill。
+- **应用内 Cmd/Ctrl+R** —— 一键刷新 skills / presets / Agent 状态，不需要重启（在输入框内输入时不会触发）。
+
+### 变更
+- **用户可见的 scenario 术语统一改为 preset** —— Tauri 命令（如 `apply_preset_to_default`）、CLI 子命令（`skills-manager-cli presets ...`）、CLI JSON 字段（`preset_id` / `preset_name`）、前端类型和 i18n key 现在都使用 `preset`。CLI 会保留 `scenarios`、`--scenario`、`--sync-scenario` 作为隐藏兼容别名一个版本。内部 Rust 类型、SQLite schema 和 Git Backup metadata 仍保留 `scenario` 以保证兼容。
+- **启用 / 禁用 skill 现在通过 preset 成员管理** —— 使用 `presets add-skill` / `presets remove-skill` 来决定哪些 skill 会被同步到 Agent。本版本起，旧的 `enabled` 标志不再参与同步判定。
+- **侧栏选中的 preset 不再被外部切换强制带走** —— 当 CLI 或托盘菜单切换激活 preset 时，仅当你正在浏览的就是上一个激活 preset，侧栏才会跟着走；如果你正在看另一个 preset，那个选择会保留下来。
+
+### 弃用
+- **`skills enable` / `skills disable` CLI** —— 两个命令现在都是 no-op，只打印弃用提示。请改用 `presets add-skill` / `presets remove-skill`。
+
+### 修复
+- **`presets close <非当前 preset>` 不再破坏当前激活 preset 的同步** —— 此前关闭一个非激活 preset 会把它和激活 preset 共用的 skill 的同步目标一起删掉；现在会在删完之后重新同步激活 preset，把共用部分恢复回来。
+- **`skills disable` 不会再偷偷把 skill 重新启用** —— 弃用前的 `disable` 实现会把旧的 `enabled` 标志翻回 `true`，与用户意图正好相反。现在它不再修改这个字段。
+
+### 移除
+- **SkillsMP AI 搜索** —— 移除第三方 `skillsmp.com` 集成（设置里的 API Key、安装页面的 "AI Search" 开关、`search_skillsmp` Tauri 命令）。免费的 skills.sh 市场和关键词搜索仍然保留。SkillsMP 没有被任何主流 Agent 生态采用，引入了付费第三方依赖且没有独特价值。
+
 ## [1.19.3] - 2026-05-17
 
 ### 新增

@@ -368,7 +368,7 @@ export function GlobalWorkspace() {
   const { agentKey } = useParams<{ agentKey?: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { tools, managedSkills, scenarios, refreshManagedSkills, refreshTools } = useApp();
+  const { tools, managedSkills, presets, refreshManagedSkills, refreshTools } = useApp();
 
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [search, setSearch] = useState("");
@@ -761,9 +761,9 @@ export function GlobalWorkspace() {
             </div>
           </div>
 
-          {scenarios.length > 0 && (
+          {presets.length > 0 && (
             <PresetBar
-              presets={scenarios}
+              presets={presets}
               managedSkills={managedSkills}
               agentKeys={presetBarAgentKeys}
               existsInWorkspace={existsInGlobal}
@@ -921,9 +921,9 @@ export function GlobalWorkspace() {
         )}
 
         {/* Preset bar */}
-        {scenarios.length > 0 && (
+        {presets.length > 0 && (
           <PresetBar
-            presets={scenarios}
+            presets={presets}
             managedSkills={managedSkills}
             agentKeys={presetBarAgentKeys}
             existsInWorkspace={existsInGlobal}

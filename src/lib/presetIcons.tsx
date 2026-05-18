@@ -32,9 +32,9 @@ import {
   Wrench,
   Zap,
 } from "lucide-react";
-import type { Scenario } from "./tauri";
+import type { Preset } from "./tauri";
 
-export interface ScenarioIconOption {
+export interface PresetIconOption {
   key: string;
   label: string;
   icon: LucideIcon;
@@ -42,7 +42,7 @@ export interface ScenarioIconOption {
   activeClass: string;
 }
 
-export const SCENARIO_ICON_OPTIONS: ScenarioIconOption[] = [
+export const PRESET_ICON_OPTIONS: PresetIconOption[] = [
   {
     key: "briefcase",
     label: "Work",
@@ -262,11 +262,11 @@ export const SCENARIO_ICON_OPTIONS: ScenarioIconOption[] = [
   },
 ];
 
-const SCENARIO_ICON_MAP = new Map(
-  SCENARIO_ICON_OPTIONS.map((option) => [option.key, option] as const)
+const PRESET_ICON_MAP = new Map(
+  PRESET_ICON_OPTIONS.map((option) => [option.key, option] as const)
 );
 
-const SCENARIO_KEYWORD_RULES: Array<{ key: string; keywords: string[] }> = [
+const PRESET_KEYWORD_RULES: Array<{ key: string; keywords: string[] }> = [
   { key: "briefcase", keywords: ["工作", "work", "office", "client"] },
   { key: "book-open", keywords: ["学习", "study", "learn", "course", "research"] },
   { key: "folder-git-2", keywords: ["开源", "opensource", "open source", "github"] },
@@ -293,25 +293,25 @@ const SCENARIO_KEYWORD_RULES: Array<{ key: string; keywords: string[] }> = [
   { key: "palette", keywords: ["设计", "design", "brand", "ui"] },
 ];
 
-export function inferScenarioIconKey(scenario?: Pick<Scenario, "name" | "description" | "icon"> | null) {
-  if (scenario?.icon && SCENARIO_ICON_MAP.has(scenario.icon)) {
-    return scenario.icon;
+export function inferPresetIconKey(preset?: Pick<Preset, "name" | "description" | "icon"> | null) {
+  if (preset?.icon && PRESET_ICON_MAP.has(preset.icon)) {
+    return preset.icon;
   }
 
-  const haystack = `${scenario?.name || ""} ${scenario?.description || ""}`.toLowerCase();
-  const matched = SCENARIO_KEYWORD_RULES.find((rule) =>
+  const haystack = `${preset?.name || ""} ${preset?.description || ""}`.toLowerCase();
+  const matched = PRESET_KEYWORD_RULES.find((rule) =>
     rule.keywords.some((keyword) => haystack.includes(keyword))
   );
 
   return matched?.key || "briefcase";
 }
 
-export function getScenarioIconOption(
-  scenario?: Pick<Scenario, "name" | "description" | "icon"> | string | null
+export function getPresetIconOption(
+  preset?: Pick<Preset, "name" | "description" | "icon"> | string | null
 ) {
   const key =
-    typeof scenario === "string"
-      ? scenario
-      : inferScenarioIconKey(scenario);
-  return SCENARIO_ICON_MAP.get(key) || SCENARIO_ICON_OPTIONS[0];
+    typeof preset === "string"
+      ? preset
+      : inferPresetIconKey(preset);
+  return PRESET_ICON_MAP.get(key) || PRESET_ICON_OPTIONS[0];
 }

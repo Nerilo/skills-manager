@@ -45,7 +45,7 @@ export interface ManagedSkill {
   updated_at: number;
   status: string;
   targets: SkillTarget[];
-  scenario_ids: string[];
+  preset_ids: string[];
   tags: string[];
 }
 
@@ -85,7 +85,7 @@ export interface SourceSkillDocument {
   revision: string;
 }
 
-export interface Scenario {
+export interface Preset {
   id: string;
   name: string;
   description: string | null;
@@ -231,9 +231,9 @@ export const removeCustomTool = (key: string) =>
 export const getManagedSkills = () =>
   invoke<ManagedSkill[]>("get_managed_skills");
 
-export const getSkillsForScenario = (scenarioId: string) =>
-  invoke<ManagedSkill[]>("get_skills_for_scenario", {
-    scenarioId,
+export const getSkillsForPreset = (presetId: string) =>
+  invoke<ManagedSkill[]>("get_skills_for_preset", {
+    presetId,
   });
 
 export const getSkillDocument = (skillId: string) =>
@@ -351,16 +351,16 @@ export const syncSkillToTool = (skillId: string, tool: string) =>
 export const unsyncSkillFromTool = (skillId: string, tool: string) =>
   invoke<void>("unsync_skill_from_tool", { skillId, tool });
 
-export const getSkillToolToggles = (skillId: string, scenarioId: string) =>
-  invoke<SkillToolToggle[]>("get_skill_tool_toggles", { skillId, scenarioId });
+export const getSkillToolToggles = (skillId: string, presetId: string) =>
+  invoke<SkillToolToggle[]>("get_skill_tool_toggles", { skillId, presetId });
 
 export const setSkillToolToggle = (
   skillId: string,
-  scenarioId: string,
+  presetId: string,
   tool: string,
   enabled: boolean
 ) =>
-  invoke<void>("set_skill_tool_toggle", { skillId, scenarioId, tool, enabled });
+  invoke<void>("set_skill_tool_toggle", { skillId, presetId, tool, enabled });
 
 export const syncWslLibraryReplica = (distroName: string) =>
   invoke<void>("sync_wsl_library_replica", { distroName });
@@ -383,19 +383,6 @@ export const fetchLeaderboard = (board: string) =>
 export const searchSkillssh = (query: string, limit?: number) =>
   invoke<SkillsShSkill[]>("search_skillssh", {
     query,
-    limit: limit ?? null,
-  });
-
-export const searchSkillsmp = (
-  query: string,
-  ai?: boolean,
-  page?: number,
-  limit?: number,
-) =>
-  invoke<SkillsShSkill[]>("search_skillsmp", {
-    query,
-    ai: ai ?? null,
-    page: page ?? null,
     limit: limit ?? null,
   });
 
@@ -553,60 +540,60 @@ export const gitBackupListVersions = (limit?: number) =>
 export const gitBackupRestoreVersion = (tag: string) =>
   invoke<void>("git_backup_restore_version", { tag });
 
-// ── Scenarios ──
+// ── Presets ──
 
-export const getScenarios = () => invoke<Scenario[]>("get_scenarios");
+export const getPresets = () => invoke<Preset[]>("get_presets");
 
-export const getActiveScenario = () =>
-  invoke<Scenario | null>("get_active_scenario");
+export const getActivePreset = () =>
+  invoke<Preset | null>("get_active_preset");
 
-export const createScenario = (name: string, description?: string, icon?: string) =>
-  invoke<Scenario>("create_scenario", {
+export const createPreset = (name: string, description?: string, icon?: string) =>
+  invoke<Preset>("create_preset", {
     name,
     description: description || null,
     icon: icon || null,
   });
 
-export const updateScenario = (
+export const updatePreset = (
   id: string,
   name: string,
   description?: string,
   icon?: string
 ) =>
-  invoke<void>("update_scenario", {
+  invoke<void>("update_preset", {
     id,
     name,
     description: description || null,
     icon: icon || null,
   });
 
-export const deleteScenario = (id: string) =>
-  invoke<void>("delete_scenario", { id });
+export const deletePreset = (id: string) =>
+  invoke<void>("delete_preset", { id });
 
-/** @deprecated v1.16+: clicking a scene no longer applies. Use applyScenarioToDefault. */
-export const switchScenario = (id: string) =>
-  invoke<void>("switch_scenario", { id });
+/** @deprecated v1.16+: clicking a scene no longer applies. Use applyPresetToDefault. */
+export const switchPreset = (id: string) =>
+  invoke<void>("switch_preset", { id });
 
-export const applyScenarioToDefault = (id: string) =>
-  invoke<void>("apply_scenario_to_default", { id });
+export const applyPresetToDefault = (id: string) =>
+  invoke<void>("apply_preset_to_default", { id });
 
-export const addSkillToScenario = (skillId: string, scenarioId: string) =>
-  invoke<void>("add_skill_to_scenario", { skillId, scenarioId });
+export const addSkillToPreset = (skillId: string, presetId: string) =>
+  invoke<void>("add_skill_to_preset", { skillId, presetId });
 
-export const removeSkillFromScenario = (skillId: string, scenarioId: string) =>
-  invoke<void>("remove_skill_from_scenario", { skillId, scenarioId });
+export const removeSkillFromPreset = (skillId: string, presetId: string) =>
+  invoke<void>("remove_skill_from_preset", { skillId, presetId });
 
-export const reorderScenarios = (ids: string[]) =>
-  invoke<void>("reorder_scenarios", { ids });
+export const reorderPresets = (ids: string[]) =>
+  invoke<void>("reorder_presets", { ids });
 
 export const reorderProjects = (ids: string[]) =>
   invoke<void>("reorder_projects", { ids });
 
-export const getScenarioSkillOrder = (scenarioId: string) =>
-  invoke<string[]>("get_scenario_skill_order", { scenarioId });
+export const getPresetSkillOrder = (presetId: string) =>
+  invoke<string[]>("get_preset_skill_order", { presetId });
 
-export const reorderScenarioSkills = (scenarioId: string, skillIds: string[]) =>
-  invoke<void>("reorder_scenario_skills", { scenarioId, skillIds });
+export const reorderPresetSkills = (presetId: string, skillIds: string[]) =>
+  invoke<void>("reorder_preset_skills", { presetId, skillIds });
 
 // ── Projects ──
 

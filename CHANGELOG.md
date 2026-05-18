@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-05-18
+
+### Added
+- **`skills-manager-cli` write commands** — the CLI now lets agents fully manage skills: `install` (local path / git URL / `owner/repo[@skill]` shorthand), `update`, `check`, `remove`, `sync`, `search` (skills.sh marketplace, no API key), `adopt` (pull existing skills from agent directories into the central library), and `tag add/remove/list`. Every command supports `--json`; `remove`, `sync`, and `adopt` support `--dry-run`. `remove` always requires `--yes`.
+- **`presets add-skill` / `remove-skill` CLI commands** — manage which skills belong to a preset from the command line.
+- **`presets deactivate` CLI command** (with `close` / `stop` / `off` / `disable` aliases) — close a preset and tear down its sync targets. When the closed preset is the active one a replacement is applied automatically; when it isn't, the active preset is re-synced so any shared skills keep their sync targets.
+- **`manage-skills` skill** (`assets/manage-skills/SKILL.md`) — drop into `~/.claude/skills/` so Claude Code (and other agents) prefers `skills-manager-cli` over installing skills directly into one agent's directory.
+- **Cmd/Ctrl+R in the app** — refresh skills, presets, and agent status without restarting (ignored while typing in an input).
+
+### Changed
+- **User-facing scenario terminology is now preset terminology** — Tauri commands (`apply_preset_to_default`, etc.), CLI subcommands (`skills-manager-cli presets ...`), CLI JSON fields (`preset_id` / `preset_name`), frontend types, and i18n keys now consistently use `preset`. The CLI keeps `scenarios`, `--scenario`, and `--sync-scenario` as hidden backward-compatible aliases for one release. Internal Rust types, the SQLite schema, and Git Backup metadata still use `scenario` for compatibility.
+- **Enable/disable a skill by preset membership** — `presets add-skill` / `presets remove-skill` are now the supported way to include or exclude a skill from sync. The legacy `enabled` flag is no longer consulted when computing what to sync.
+- **Sidebar preset selection sticks across external switches** — when the CLI or tray menu switches the active preset, the sidebar only follows if you were already viewing the previous active preset. A preset you're browsing manually is no longer yanked away.
+
+### Deprecated
+- **`skills enable` / `skills disable` CLI** — both are now no-ops that print a deprecation notice. Use `presets add-skill` / `presets remove-skill` instead.
+
+### Fixed
+- **`presets close <non-active preset>` no longer breaks the active preset's sync** — previously closing a non-active preset removed sync targets for any skill it shared with the active preset; the active preset is now re-synced afterwards.
+- **`skills disable` no longer secretly re-enables the skill** — the deprecated command used to flip the legacy `enabled` flag back to `true`, the opposite of what was asked. It now leaves the flag alone.
+
+### Removed
+- **SkillsMP AI search** — the third-party `skillsmp.com` integration (API key in Settings, "AI Search" toggle in Install Skills, the `search_skillsmp` Tauri command) has been removed. The free skills.sh marketplace and its keyword search remain. The SkillsMP service was not used by any major agent ecosystem and added a paid third-party dependency without unique value.
+
 ## [1.19.3] - 2026-05-17
 
 ### Added

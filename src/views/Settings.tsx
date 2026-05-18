@@ -21,7 +21,6 @@ import {
   Download,
   FileArchive,
   Type,
-  Key,
   Pencil,
   RotateCcw,
   Plus,
@@ -168,11 +167,11 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 
 export function Settings() {
   const { t, i18n } = useTranslation();
-  const { tools, scenarios, wslRuntimes, refreshTools, refreshWslRuntimes, openHelp } = useApp();
+  const { tools, presets, wslRuntimes, refreshTools, refreshWslRuntimes, openHelp } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
-  const [defaultScenario, setDefaultScenario] = useState("");
+  const [defaultPreset, setDefaultPreset] = useState("");
   const [closeAction, setCloseAction] = useState("");
   const [showTrayIcon, setShowTrayIcon] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -194,8 +193,6 @@ export function Settings() {
   const [proxyInput, setProxyInput] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [textSize, setTextSize] = useState("default");
-  const [skillsmpApiKey, setSkillsmpApiKey] = useState("");
-  const [skillsmpSaving, setSkillsmpSaving] = useState(false);
   const [wslDistroName, setWslDistroName] = useState("");
   const [wslLibraryReplicaPath, setWslLibraryReplicaPath] = useState("");
   const [savingWslRuntime, setSavingWslRuntime] = useState(false);
@@ -328,7 +325,7 @@ export function Settings() {
 
   useEffect(() => {
     api.getSettings("sync_mode").then((v) => { if (v) setSyncMode(v); });
-    api.getSettings("default_scenario").then((v) => { if (v) setDefaultScenario(v); });
+    api.getSettings("default_scenario").then((v) => { if (v) setDefaultPreset(v); });
     api.getSettings("proxy_url").then((v) => { setProxyInput(v ?? ""); });
     api.getSettings("close_action").then((v) => { setCloseAction(v ?? ""); });
     api.getSettings("show_tray_icon").then((v) => {
@@ -336,7 +333,6 @@ export function Settings() {
       setShowTrayIcon(!(normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off"));
     });
     api.getSettings("text_size").then((v) => { if (v) { setTextSize(v); applyTextSize(v); } });
-    api.getSettings("skillsmp_api_key").then((v) => { if (v) setSkillsmpApiKey(v); });
     api.getCentralRepoPath().then((path) => {
       setCentralRepoPath(path);
       setCentralRepoPathInput(path);
@@ -397,8 +393,8 @@ export function Settings() {
     await api.setSettings("sync_mode", mode);
   };
 
-  const handleDefaultScenarioChange = async (id: string) => {
-    setDefaultScenario(id);
+  const handleDefaultPresetChange = async (id: string) => {
+    setDefaultPreset(id);
     await api.setSettings("default_scenario", id);
   };
 
@@ -695,18 +691,6 @@ export function Settings() {
       }
     } finally {
       setInstalling(false);
-    }
-  };
-
-  const handleSaveSkillsmpApiKey = async () => {
-    setSkillsmpSaving(true);
-    try {
-      await api.setSettings("skillsmp_api_key", skillsmpApiKey.trim());
-      toast.success(t("common.success"));
-    } catch {
-      toast.error(t("common.error"));
-    } finally {
-      setSkillsmpSaving(false);
     }
   };
 
@@ -1592,20 +1576,20 @@ export function Settings() {
               </div>
             </div>
 
-            {/* Default scenario */}
+            {/* Default preset */}
             <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
-                <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.defaultScenario")}</h3>
-                <p className="text-[13px] text-muted">{t("settings.defaultScenarioDesc")}</p>
+                <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.defaultPreset")}</h3>
+                <p className="text-[13px] text-muted">{t("settings.defaultPresetDesc")}</p>
               </div>
               <div className="relative shrink-0">
                 <select
-                  value={defaultScenario}
-                  onChange={(e) => handleDefaultScenarioChange(e.target.value)}
+                  value={defaultPreset}
+                  onChange={(e) => handleDefaultPresetChange(e.target.value)}
                   className={selectClass}
                 >
                   <option value="">—</option>
-                  {scenarios.map((s) => (
+                  {presets.map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
@@ -1718,50 +1702,6 @@ export function Settings() {
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : (
                     <LinkIcon className="w-3 h-3" />
-                  )}
-                  {t("common.save")}
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* SkillsMP API Key */}
-        <section>
-          <h2 className="app-section-title mb-3">
-            {t("settings.skillsmpTitle", { defaultValue: "SkillsMP AI Search" })}
-          </h2>
-          <div className="app-panel overflow-hidden divide-y divide-border-subtle">
-            <div className="px-4 py-3">
-              <h3 className="text-[13px] text-secondary font-medium mb-0.5">{t("settings.skillsmpApiKey", { defaultValue: "API Key" })}</h3>
-              <p className="text-[13px] text-muted mb-2">
-                {t("settings.skillsmpDesc", { defaultValue: "Enter your SkillsMP API key to enable AI-powered skill search." })}{" "}
-                <button
-                  type="button"
-                  onClick={() => openUrl("https://skillsmp.com/docs/api")}
-                  className="inline-flex items-center gap-0.5 text-accent-light hover:underline"
-                >
-                  {t("settings.skillsmpGetKey", { defaultValue: "Get your API key" })}
-                  <ExternalLink className="h-3 w-3" />
-                </button>
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  type="password"
-                  value={skillsmpApiKey}
-                  onChange={(e) => setSkillsmpApiKey(e.target.value)}
-                  placeholder="sk_live_..."
-                  className={`${fieldClass} min-w-0 flex-1 font-mono`}
-                />
-                <button
-                  onClick={handleSaveSkillsmpApiKey}
-                  disabled={skillsmpSaving}
-                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
-                >
-                  {skillsmpSaving ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <Key className="w-3 h-3" />
                   )}
                   {t("common.save")}
                 </button>

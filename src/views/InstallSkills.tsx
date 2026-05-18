@@ -44,7 +44,7 @@ const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
 
 export function InstallSkills() {
   const { t } = useTranslation();
-  const { refreshScenarios, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
+  const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("market");
@@ -72,8 +72,6 @@ export function InstallSkills() {
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
   const [importingAll, setImportingAll] = useState(false);
   const [renameEditing, setRenameEditing] = useState<Record<string, string>>({});
-  const [aiSearch, setAiSearch] = useState(false);
-  const [skillsmpApiKey, setSkillsmpApiKey] = useState<string | null>(null);
   const marketListRef = useRef<HTMLDivElement | null>(null);
   const [sourceOverflowOpen, setSourceOverflowOpen] = useState(false);
   const [sourceOverflowSide, setSourceOverflowSide] = useState<"left" | "right">("left");
@@ -179,10 +177,6 @@ export function InstallSkills() {
   }, [resetSourceOverflowState, sourceOverflowOpen]);
 
   useEffect(() => {
-    api.getSettings("skillsmp_api_key").then((v) => setSkillsmpApiKey(v || null));
-  }, []);
-
-  useEffect(() => {
     const tab = searchParams.get("tab");
     if (tab === "market" || tab === "local" || tab === "git") {
       setActiveTab(tab);
@@ -240,7 +234,7 @@ export function InstallSkills() {
       marketSearchLimit > marketSkillsLengthRef.current;
 
     if (query.length > 0 && !loadingMore) {
-      const cacheKey = `${query.toLowerCase()}|${aiSearch ? "ai" : "kw"}|${marketSearchLimit}`;
+      const cacheKey = `${query.toLowerCase()}|${marketSearchLimit}`;
       const cached = marketSearchCacheRef.current.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < MARKET_SEARCH_CACHE_TTL_MS) {
         setMarketSkills(cached.data);
@@ -261,9 +255,7 @@ export function InstallSkills() {
 
     let stale = false;
     const request = query
-      ? (aiSearch
-        ? api.searchSkillsmp(query, true, undefined, marketSearchLimit)
-        : api.searchSkillssh(query, marketSearchLimit))
+      ? api.searchSkillssh(query, marketSearchLimit)
       : api.fetchLeaderboard(marketTab);
 
     request
@@ -271,7 +263,7 @@ export function InstallSkills() {
         if (stale) return;
         setMarketSkills(result);
         if (query.length > 0 && !loadingMore) {
-          const cacheKey = `${query.toLowerCase()}|${aiSearch ? "ai" : "kw"}|${marketSearchLimit}`;
+          const cacheKey = `${query.toLowerCase()}|${marketSearchLimit}`;
           marketSearchCacheRef.current.set(cacheKey, { timestamp: Date.now(), data: result });
           pruneMarketSearchCache();
         }
@@ -293,7 +285,7 @@ export function InstallSkills() {
       });
 
     return () => { stale = true; };
-  }, [activeTab, aiSearch, debouncedMarketQuery, marketReloadKey, marketSearchLimit, marketTab, pruneMarketSearchCache, t]);
+  }, [activeTab, debouncedMarketQuery, marketReloadKey, marketSearchLimit, marketTab, pruneMarketSearchCache, t]);
 
   useEffect(() => {
     if (activeTab === "local" && !scanResult && !scanLoading) {
@@ -315,7 +307,7 @@ export function InstallSkills() {
     // Install succeeded — post-install refresh is best-effort and must not
     // surface as an install failure.
     const results = await Promise.allSettled([
-      refreshScenarios(),
+      refreshPresets(),
       refreshManagedSkills(),
       runScanSilent(),
     ]);
@@ -408,7 +400,7 @@ export function InstallSkills() {
         );
       }
 
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+      await Promise.all([refreshPresets(), refreshManagedSkills()]);
       runScan();
     } catch (error: unknown) {
       const message = getErrorMessage(error, t("common.error"));
@@ -444,7 +436,7 @@ export function InstallSkills() {
         }
       );
       await api.installFromSkillssh(skill.source, skill.skill_id);
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+      await Promise.all([refreshPresets(), refreshManagedSkills()]);
       toast.success(t("install.toast.success", { name: displayName }), {
         id: toastId,
         action: {
@@ -539,7 +531,7 @@ export function InstallSkills() {
         gitPreview.temp_dir,
         selected.map((s) => ({ rel_path: s.rel_path, name: s.name }))
       );
-      await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+      await Promise.all([refreshPresets(), refreshManagedSkills()]);
       toast.success(t("install.toast.success", { name: selected.map((s) => s.name).join(", ") }));
       setGitUrl("");
       setGitPreview(null);
@@ -563,7 +555,7 @@ export function InstallSkills() {
       }
       toast.success(t("install.scan.importedOne", { name }));
       const results = await Promise.allSettled([
-        refreshScenarios(),
+        refreshPresets(),
         refreshManagedSkills(),
         runScanSilent(),
       ]);
@@ -588,7 +580,7 @@ export function InstallSkills() {
       }
       toast.success(t("install.scan.importedAll"));
       const results = await Promise.allSettled([
-        refreshScenarios(),
+        refreshPresets(),
         refreshManagedSkills(),
         runScanSilent(),
       ]);
@@ -795,39 +787,13 @@ export function InstallSkills() {
                         setMarketQuery(event.target.value);
                         setMarketSearchLimit(MARKET_SEARCH_STEP);
                       }}
-                      placeholder={aiSearch ? t("install.aiSearchPlaceholder", { defaultValue: "AI search — describe what you need..." }) : t("install.searchMarket")}
+                      placeholder={t("install.searchMarket")}
                       className="app-input w-full bg-background pl-9"
                       autoCapitalize="none"
                       autoCorrect="off"
                       spellCheck={false}
                     />
                   </div>
-                  <button
-                    onClick={() => {
-                      if (skillsmpApiKey) {
-                        setAiSearch((v) => !v);
-                      } else {
-                        toast.info(
-                          t("install.aiSearchNoKey", { defaultValue: "Set your SkillsMP API key in Settings to enable AI search" }),
-                          {
-                            action: {
-                              label: t("common.goToSettings", { defaultValue: "Settings" }),
-                              onClick: () => navigate("/settings"),
-                            },
-                          }
-                        );
-                      }
-                    }}
-                    className={cn(
-                      "shrink-0 h-10 rounded-lg border px-3 text-[13px] font-medium transition-colors",
-                      aiSearch && skillsmpApiKey
-                        ? "border-accent-border bg-accent-bg text-accent-light"
-                        : "border-border-subtle bg-background text-muted hover:bg-surface-hover hover:text-secondary"
-                    )}
-                    title={t("install.aiSearchToggle", { defaultValue: "AI-powered search (SkillsMP)" })}
-                  >
-                    {t("install.aiSearchButton", { defaultValue: "AI Search" })}
-                  </button>
                 </div>
               </div>
 

@@ -19,7 +19,6 @@ pub mod scenario_service;
 pub mod skill_distribution;
 pub mod skill_metadata;
 pub mod skill_store;
-pub mod skillsmp_api;
 pub mod skillssh_api;
 pub mod sync_engine;
 pub mod sync_metadata;

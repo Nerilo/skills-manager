@@ -2,7 +2,8 @@ import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ManagedSkill, ToolInfo } from "../lib/tauri";
 import { cn } from "../utils";
-import { AgentIcon, hasAgentIcon } from "./AgentIcon";
+import { AgentIcon } from "./AgentIcon";
+import { hasAgentIcon } from "../lib/agentIcons";
 
 function shortLabel(displayName: string, key: string): string {
   const words = displayName.trim().split(/\s+/).filter(Boolean);

@@ -152,7 +152,7 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { projects, scenarios, managedSkills, refreshManagedSkills, refreshScenarios, refreshProjects } = useApp();
+  const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
   const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [selectedExportAgents, setSelectedExportAgents] = useState<string[]>([]);
@@ -465,7 +465,7 @@ export function ProjectDetail() {
     try {
       await api.updateProjectSkillToCenter(id, skill.primaryVariant.relative_path, skill.primaryVariant.agent);
       toast.success(t("project.updateCenterSuccess", { name: skill.name }));
-      await Promise.all([refreshManagedSkills(), refreshScenarios(), loadSkills()]);
+      await Promise.all([refreshManagedSkills(), refreshPresets(), loadSkills()]);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -702,7 +702,7 @@ export function ProjectDetail() {
       if (failed > 0) {
         toast.error(t("project.batchUpdateCenterFailed", { count: failed }));
       }
-      await Promise.all([refreshManagedSkills(), refreshScenarios(), loadSkills()]);
+      await Promise.all([refreshManagedSkills(), refreshPresets(), loadSkills()]);
     } finally {
       setBatchUpdatingCenter(false);
     }
@@ -960,9 +960,9 @@ export function ProjectDetail() {
         )}
 
         {/* Preset bar */}
-        {scenarios.length > 0 && selectedExportAgents.length > 0 && (
+        {presets.length > 0 && selectedExportAgents.length > 0 && (
           <PresetBar
-            presets={scenarios}
+            presets={presets}
             managedSkills={managedSkills}
             agentKeys={selectedExportAgents}
             existsInWorkspace={presetSkillExistsInProject}

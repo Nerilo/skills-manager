@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use super::crypto;
 
 /// Settings keys whose values are encrypted at rest with AES-256-GCM.
-const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url", "skillsmp_api_key"];
+const SENSITIVE_KEYS: &[&str] = &["proxy_url", "git_backup_remote_url"];
 
 pub struct SkillStore {
     conn: Mutex<Connection>,
@@ -308,6 +308,16 @@ impl SkillStore {
         conn.execute(
             "UPDATE skills SET update_status = ?1 WHERE id = ?2",
             params![update_status, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_skill_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE skills SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+            params![enabled, now, id],
         )?;
         Ok(())
     }

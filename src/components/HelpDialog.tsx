@@ -34,7 +34,7 @@ export function HelpDialog() {
         </div>
 
         <div className="max-h-[min(72vh,720px)] space-y-3 overflow-y-auto px-5 py-5">
-          {(["workflows", "scenarios", "install", "sync", "global", "projects", "backup", "settings"] as const).map((key, index) => {
+          {(["workflows", "presets", "install", "sync", "global", "projects", "backup", "settings"] as const).map((key, index) => {
             const Icon = GUIDE_ICONS[index];
             return (
               <div

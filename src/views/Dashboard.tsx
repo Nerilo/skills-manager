@@ -5,37 +5,37 @@ import { useTranslation } from "react-i18next";
 import { useApp } from "../context/AppContext";
 import * as api from "../lib/tauri";
 import type { ManagedSkill } from "../lib/tauri";
-import { getScenarioIconOption } from "../lib/scenarioIcons";
+import { getPresetIconOption } from "../lib/presetIcons";
 
 export function Dashboard() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { activeScenario, tools, openSkillDetailById } = useApp();
+  const { activePreset, tools, openSkillDetailById } = useApp();
   const [skills, setSkills] = useState<ManagedSkill[]>([]);
 
   const installed = tools.filter((t) => t.installed).length;
   const total = tools.length;
   const synced = skills.filter((s) => s.targets.length > 0).length;
-  const scenarioIcon = getScenarioIconOption(activeScenario);
-  const ScenarioIcon = scenarioIcon.icon;
+  const presetIcon = getPresetIconOption(activePreset);
+  const PresetIcon = presetIcon.icon;
 
   useEffect(() => {
-    if (activeScenario) {
-      api.getSkillsForScenario(activeScenario.id).then(setSkills).catch(() => { });
+    if (activePreset) {
+      api.getSkillsForPreset(activePreset.id).then(setSkills).catch(() => { });
     }
-  }, [activeScenario]);
+  }, [activePreset]);
 
   return (
     <div className="app-page app-page-narrow">
       <div className="app-page-header">
         <h1 className="app-page-title">{t("dashboard.greeting")}</h1>
         <p className="app-page-subtitle flex items-center gap-2 flex-wrap text-tertiary">
-          {t("dashboard.currentScenario")}：
+          {t("dashboard.currentPreset")}：
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[13px] font-medium ${scenarioIcon.activeClass} ${scenarioIcon.colorClass}`}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[13px] font-medium ${presetIcon.activeClass} ${presetIcon.colorClass}`}
           >
-            <ScenarioIcon className="h-3 w-3" />
-            {activeScenario?.name || "—"}
+            <PresetIcon className="h-3 w-3" />
+            {activePreset?.name || "—"}
           </span>
           <span className="text-faint">·</span>
           <span>{t("dashboard.skillsEnabled", { count: skills.length })}</span>
@@ -46,7 +46,7 @@ export function Dashboard() {
       <div className="grid grid-cols-3 gap-3.5">
         {[
           {
-            title: t("dashboard.scenarioSkills"),
+            title: t("dashboard.presetSkills"),
             value: String(skills.length),
             icon: Layers,
             color: "text-accent-light",

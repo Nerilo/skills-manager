@@ -20,14 +20,14 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
-import { CreateScenarioDialog } from "./CreateScenarioDialog";
-import { RenameScenarioDialog } from "./RenameScenarioDialog";
+import { CreatePresetDialog } from "./CreatePresetDialog";
+import { RenamePresetDialog } from "./RenamePresetDialog";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentIcon } from "./AgentIcon";
 import * as api from "../lib/tauri";
 import type { SyncHealth } from "../lib/tauri";
-import { getScenarioIconOption } from "../lib/scenarioIcons";
+import { getPresetIconOption } from "../lib/presetIcons";
 
 function getSyncHealthIndicator(health: SyncHealth, skillCount: number): { color: string; title: string } | null {
   if (skillCount === 0) return null;
@@ -47,19 +47,19 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const { scenarios, viewedScenario, setViewedScenarioId, refreshScenarios, refreshManagedSkills, projects, refreshProjects, tools, managedSkills } = useApp();
+  const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects, tools, managedSkills } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; icon?: string | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<{ id: string; name: string } | null>(null);
   const installedTools = useMemo(() => tools.filter((t) => t.installed && t.enabled), [tools]);
-  const [orderedScenarios, setOrderedScenarios] = useState(scenarios);
+  const [orderedPresets, setOrderedPresets] = useState(presets);
   const [orderedProjects, setOrderedProjects] = useState(projects);
   const [orderedTools, setOrderedTools] = useState(installedTools);
-  const scenarioReorderQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const presetReorderQueueRef = useRef<Promise<void>>(Promise.resolve());
   const projectReorderQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const [scenariosOpen, setScenariosOpen] = useState(true);
+  const [presetsOpen, setPresetsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [globalWorkspaceOpen, setGlobalWorkspaceOpen] = useState(true);
 
@@ -73,7 +73,7 @@ export function Sidebar() {
     return map;
   }, [installedTools, managedSkills]);
 
-  useEffect(() => { setOrderedScenarios(scenarios); }, [scenarios]);
+  useEffect(() => { setOrderedPresets(presets); }, [presets]);
   useEffect(() => { setOrderedProjects(projects); }, [projects]);
   useEffect(() => {
     const stored = localStorage.getItem("skills-manager:tool-order");
@@ -90,18 +90,18 @@ export function Sidebar() {
 
   const handleDragEnd = (result: DropResult) => {
     if (!result.destination || result.destination.index === result.source.index) return;
-    const reordered = [...orderedScenarios];
+    const reordered = [...orderedPresets];
     const [moved] = reordered.splice(result.source.index, 1);
     reordered.splice(result.destination.index, 0, moved);
-    setOrderedScenarios(reordered);
+    setOrderedPresets(reordered);
 
-    scenarioReorderQueueRef.current = scenarioReorderQueueRef.current
+    presetReorderQueueRef.current = presetReorderQueueRef.current
       .catch(() => undefined)
       .then(async () => {
         try {
-          await api.reorderScenarios(reordered.map((s) => s.id));
+          await api.reorderPresets(reordered.map((s) => s.id));
         } catch {
-          await refreshScenarios();
+          await refreshPresets();
           toast.error(t("common.error"));
         }
       });
@@ -141,59 +141,59 @@ export function Sidebar() {
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
   ];
 
-  const handleSwitchScenario = (id: string) => {
-    setViewedScenarioId(id);
+  const handleSwitchPreset = (id: string) => {
+    setViewedPresetId(id);
     if (location.pathname !== "/my-skills") {
       navigate("/my-skills");
     }
   };
 
-  const handleCreateScenario = async (name: string, description?: string, icon?: string) => {
-    await api.createScenario(name, description, icon);
-    await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+  const handleCreatePreset = async (name: string, description?: string, icon?: string) => {
+    await api.createPreset(name, description, icon);
+    await Promise.all([refreshPresets(), refreshManagedSkills()]);
     if (location.pathname === "/settings") {
       navigate("/my-skills");
     }
-    toast.success(t("scenario.created"));
+    toast.success(t("preset.created"));
   };
 
-  const handleRenameScenario = async (newName: string, icon?: string) => {
+  const handleRenamePreset = async (newName: string, icon?: string) => {
     if (!renameTarget) return;
-    const scenario = scenarios.find((s) => s.id === renameTarget.id);
-    if (!scenario) return;
-    await api.updateScenario(
+    const preset = presets.find((s) => s.id === renameTarget.id);
+    if (!preset) return;
+    await api.updatePreset(
       renameTarget.id,
       newName,
-      scenario.description || undefined,
-      icon || scenario.icon || undefined
+      preset.description || undefined,
+      icon || preset.icon || undefined
     );
-    await refreshScenarios();
-    toast.success(t("scenario.renamed"));
+    await refreshPresets();
+    toast.success(t("preset.renamed"));
   };
 
-  const handleDeleteScenario = async () => {
+  const handleDeletePreset = async () => {
     if (!deleteTarget) return;
-    await api.deleteScenario(deleteTarget.id);
-    await Promise.all([refreshScenarios(), refreshManagedSkills()]);
+    await api.deletePreset(deleteTarget.id);
+    await Promise.all([refreshPresets(), refreshManagedSkills()]);
     if (location.pathname === "/settings") {
       navigate("/my-skills");
     }
-    toast.success(t("scenario.deleted"));
+    toast.success(t("preset.deleted"));
   };
 
   const handleRenameClick = (
     event: React.MouseEvent,
-    scenario: { id: string; name: string; icon?: string | null }
+    preset: { id: string; name: string; icon?: string | null }
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    setRenameTarget(scenario);
+    setRenameTarget(preset);
   };
 
-  const handleDeleteClick = (event: React.MouseEvent, scenario: { id: string; name: string }) => {
+  const handleDeleteClick = (event: React.MouseEvent, preset: { id: string; name: string }) => {
     event.preventDefault();
     event.stopPropagation();
-    setDeleteTarget(scenario);
+    setDeleteTarget(preset);
   };
 
   const handleDeleteProject = async () => {
@@ -255,33 +255,33 @@ export function Sidebar() {
           {/* ── Presets ── */}
           <div className="mb-1.5 px-2.5 flex items-center gap-1">
             <button
-              onClick={() => setScenariosOpen((v) => !v)}
+              onClick={() => setPresetsOpen((v) => !v)}
               className="flex min-w-0 flex-1 items-center gap-1 text-left outline-none"
             >
-              {scenariosOpen
+              {presetsOpen
                 ? <ChevronDown className="h-3 w-3 shrink-0 text-faint" />
                 : <ChevronRight className="h-3 w-3 shrink-0 text-faint" />}
               <span className="truncate text-[12px] font-semibold tracking-[0.01em] text-muted whitespace-nowrap">
-                {t("sidebar.scenarios")}
+                {t("sidebar.presets")}
               </span>
             </button>
           </div>
-          {scenariosOpen && (
+          {presetsOpen && (
             <>
               <DragDropContext onDragEnd={handleDragEnd}>
-                <Droppable droppableId="scenarios">
+                <Droppable droppableId="presets">
                   {(droppableProvided) => (
                     <div
                       className="space-y-0.5"
                       ref={droppableProvided.innerRef}
                       {...droppableProvided.droppableProps}
                     >
-                      {orderedScenarios.map((scenario, index) => {
-                        const isActive = viewedScenario?.id === scenario.id;
-                        const scenarioIcon = getScenarioIconOption(scenario);
-                        const ScenarioIcon = scenarioIcon.icon;
+                      {orderedPresets.map((preset, index) => {
+                        const isActive = viewedPreset?.id === preset.id;
+                        const presetIcon = getPresetIconOption(preset);
+                        const PresetIcon = presetIcon.icon;
                         return (
-                          <Draggable key={scenario.id} draggableId={scenario.id} index={index}>
+                          <Draggable key={preset.id} draggableId={preset.id} index={index}>
                             {(provided) => (
                               <div
                                 ref={provided.innerRef}
@@ -292,7 +292,7 @@ export function Sidebar() {
                                 )}
                               >
                                 <button
-                                  onClick={() => handleSwitchScenario(scenario.id)}
+                                  onClick={() => handleSwitchPreset(preset.id)}
                                   className={cn(
                                     "flex min-w-0 flex-1 items-center gap-2 px-2.5 py-[7px] text-left text-sm leading-5 outline-none",
                                     isActive ? "font-medium text-primary" : "text-tertiary group-hover:text-secondary"
@@ -302,15 +302,15 @@ export function Sidebar() {
                                     className={cn(
                                       "flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded border",
                                       isActive
-                                        ? `${scenarioIcon.activeClass} ${scenarioIcon.colorClass}`
+                                        ? `${presetIcon.activeClass} ${presetIcon.colorClass}`
                                         : "border-border bg-surface text-muted group-hover:border-border group-hover:text-tertiary"
                                     )}
                                   >
-                                    <ScenarioIcon className="h-3 w-3" />
+                                    <PresetIcon className="h-3 w-3" />
                                   </span>
-                                  <span className="flex-1 truncate">{scenario.name}</span>
+                                  <span className="flex-1 truncate">{preset.name}</span>
                                   <span className="ml-auto flex h-[18px] w-[32px] shrink-0 items-center justify-end group-hover:hidden">
-                                    {scenario.skill_count > 0 && (
+                                    {preset.skill_count > 0 && (
                                       <span
                                         className={cn(
                                           "min-w-[18px] rounded-full px-1.5 text-center text-[12px] font-medium leading-[18px] tabular-nums",
@@ -319,7 +319,7 @@ export function Sidebar() {
                                             : "bg-surface-hover text-muted"
                                         )}
                                       >
-                                        {scenario.skill_count}
+                                        {preset.skill_count}
                                       </span>
                                     )}
                                   </span>
@@ -335,14 +335,14 @@ export function Sidebar() {
                                     <GripVertical className="h-3 w-3" />
                                   </div>
                                   <button
-                                    onClick={(event) => handleRenameClick(event, scenario)}
+                                    onClick={(event) => handleRenameClick(event, preset)}
                                     className="rounded p-1 text-faint transition hover:text-secondary"
                                     title={t("common.rename")}
                                   >
                                     <Pencil className="h-3 w-3" />
                                   </button>
                                   <button
-                                    onClick={(event) => handleDeleteClick(event, scenario)}
+                                    onClick={(event) => handleDeleteClick(event, preset)}
                                     className="rounded p-1 text-faint transition hover:text-red-400"
                                     title={t("common.delete")}
                                   >
@@ -364,7 +364,7 @@ export function Sidebar() {
                 className="flex items-center gap-2 px-2.5 py-[7px] mt-1 rounded-[5px] text-sm text-muted hover:text-secondary hover:bg-surface-hover transition-colors w-full outline-none"
               >
                 <Plus className="w-3.5 h-3.5" />
-                {t("sidebar.newScenario")}
+                {t("sidebar.newPreset")}
               </button>
             </>
           )}
@@ -640,25 +640,25 @@ export function Sidebar() {
         </div>
       </div>
 
-      <CreateScenarioDialog
+      <CreatePresetDialog
         open={showCreate}
         onClose={() => setShowCreate(false)}
-        onCreate={handleCreateScenario}
+        onCreate={handleCreatePreset}
       />
 
-      <RenameScenarioDialog
+      <RenamePresetDialog
         open={renameTarget !== null}
         currentName={renameTarget?.name || ""}
         currentIcon={renameTarget?.icon}
         onClose={() => setRenameTarget(null)}
-        onRename={handleRenameScenario}
+        onRename={handleRenamePreset}
       />
 
       <ConfirmDialog
         open={deleteTarget !== null}
-        message={t("scenario.deleteConfirm", { name: deleteTarget?.name || "" })}
+        message={t("preset.deleteConfirm", { name: deleteTarget?.name || "" })}
         onClose={() => setDeleteTarget(null)}
-        onConfirm={handleDeleteScenario}
+        onConfirm={handleDeletePreset}
       />
 
       <AddProjectDialog

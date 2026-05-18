@@ -1,4 +1,4 @@
-import type { ManagedSkill, Scenario } from "./tauri";
+import type { ManagedSkill, Preset } from "./tauri";
 
 export type PresetStatus = "active" | "partial" | "inactive" | "empty";
 
@@ -9,12 +9,12 @@ export interface PresetStatusResult {
 }
 
 export function computePresetStatus(
-  preset: Scenario,
+  preset: Preset,
   skills: ManagedSkill[],
   agentKeys: string[],
   existsInWorkspace: (skill: ManagedSkill, agentKey: string) => boolean
 ): PresetStatusResult {
-  const presetSkills = skills.filter((s) => s.scenario_ids.includes(preset.id));
+  const presetSkills = skills.filter((s) => s.preset_ids.includes(preset.id));
   if (presetSkills.length === 0 || agentKeys.length === 0) {
     return { status: "empty", installed: 0, total: 0 };
   }

@@ -12,10 +12,10 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { getScenarioIconOption } from "../lib/scenarioIcons";
+import { getPresetIconOption } from "../lib/presetIcons";
 import { cn } from "../utils";
 
-type ItemKind = "skill" | "scenario" | "project" | "action";
+type ItemKind = "skill" | "preset" | "project" | "action";
 
 interface PaletteItem {
   id: string;
@@ -32,10 +32,10 @@ export function CommandPalette() {
   const navigate = useNavigate();
   const {
     managedSkills,
-    scenarios,
+    presets,
     projects,
-    viewedScenario,
-    setViewedScenarioId,
+    viewedPreset,
+    setViewedPresetId,
     openSkillDetailById,
   } = useApp();
 
@@ -103,21 +103,21 @@ export function CommandPalette() {
         },
       }));
 
-    const scenarioItems: PaletteItem[] = scenarios
+    const presetItems: PaletteItem[] = presets
       .filter((s) => !q || s.name.toLowerCase().includes(q))
       .slice(0, 6)
       .map((s) => {
-        const option = getScenarioIconOption(s);
+        const option = getPresetIconOption(s);
         const Icon = option.icon;
         return {
-          id: `scn:${s.id}`,
-          kind: "scenario",
+          id: `preset:${s.id}`,
+          kind: "preset",
           label: s.name,
           sublabel: s.description || `${s.skill_count} skills`,
           icon: <Icon className="h-3.5 w-3.5" />,
           run: () => {
-            if (viewedScenario?.id !== s.id) {
-              setViewedScenarioId(s.id);
+            if (viewedPreset?.id !== s.id) {
+              setViewedPresetId(s.id);
             }
             if (!window.location.pathname.endsWith("/my-skills")) {
               navigate("/my-skills");
@@ -183,14 +183,14 @@ export function CommandPalette() {
     ];
     const actions = actionDefs.filter((a) => !q || a.label.toLowerCase().includes(q));
 
-    return [...skillItems, ...scenarioItems, ...projectItems, ...actions];
+    return [...skillItems, ...presetItems, ...projectItems, ...actions];
   }, [
     query,
     managedSkills,
-    scenarios,
+    presets,
     projects,
-    viewedScenario?.id,
-    setViewedScenarioId,
+    viewedPreset?.id,
+    setViewedPresetId,
     openSkillDetailById,
     navigate,
     t,
@@ -213,7 +213,7 @@ export function CommandPalette() {
 
   const groups: { kind: ItemKind; label: string }[] = [
     { kind: "skill", label: t("commandPalette.skills") },
-    { kind: "scenario", label: t("commandPalette.scenarios") },
+    { kind: "preset", label: t("commandPalette.presets") },
     { kind: "project", label: t("commandPalette.projects") },
     { kind: "action", label: t("commandPalette.actions") },
   ];

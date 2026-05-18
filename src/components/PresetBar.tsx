@@ -4,12 +4,12 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
 import { computePresetStatus } from "../lib/presetStatus";
-import { getScenarioIconOption } from "../lib/scenarioIcons";
-import type { ManagedSkill, Scenario } from "../lib/tauri";
+import { getPresetIconOption } from "../lib/presetIcons";
+import type { ManagedSkill, Preset } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 
 export interface PresetBarProps {
-  presets: Scenario[];
+  presets: Preset[];
   managedSkills: ManagedSkill[];
   agentKeys: string[];
   existsInWorkspace: (skill: ManagedSkill, agentKey: string) => boolean;
@@ -43,10 +43,10 @@ export function PresetBar({
     [presets, statuses]
   );
 
-  const handleActivate = useCallback(async (preset: Scenario) => {
+  const handleActivate = useCallback(async (preset: Preset) => {
     setLoadingKey(`${preset.id}-add`);
     try {
-      const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
+      const presetSkills = managedSkills.filter((s) => s.preset_ids.includes(preset.id));
       let added = 0, skipped = 0, failed = 0;
       for (const skill of presetSkills) {
         for (const agentKey of agentKeys) {
@@ -69,10 +69,10 @@ export function PresetBar({
     }
   }, [agentKeys, existsInWorkspace, managedSkills, onAddSkill, onComplete, t]);
 
-  const handleDeactivate = useCallback(async (preset: Scenario) => {
+  const handleDeactivate = useCallback(async (preset: Preset) => {
     setLoadingKey(`${preset.id}-remove`);
     try {
-      const presetSkills = managedSkills.filter((s) => s.scenario_ids.includes(preset.id));
+      const presetSkills = managedSkills.filter((s) => s.preset_ids.includes(preset.id));
       let removed = 0, failed = 0;
       for (const skill of presetSkills) {
         for (const agentKey of agentKeys) {
@@ -101,12 +101,12 @@ export function PresetBar({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-      <span className="shrink-0 text-[12px] text-muted">{t("sidebar.scenarios")}</span>
+      <span className="shrink-0 text-[12px] text-muted">{t("sidebar.presets")}</span>
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto scrollbar-hide">
         {visiblePresets.map((preset) => {
           const s = statuses.get(preset.id)!;
-          const scenarioIcon = getScenarioIconOption(preset);
-          const Icon = scenarioIcon.icon;
+          const presetIcon = getPresetIconOption(preset);
+          const Icon = presetIcon.icon;
           const isLoading = loadingKey?.startsWith(preset.id) ?? false;
 
           return (
@@ -122,7 +122,7 @@ export function PresetBar({
               className={cn(
                 "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] font-medium transition-colors disabled:opacity-50",
                 s.status === "active"
-                  ? `${scenarioIcon.activeClass} ${scenarioIcon.colorClass}`
+                  ? `${presetIcon.activeClass} ${presetIcon.colorClass}`
                   : s.status === "partial"
                   ? "border-amber-400/50 bg-amber-500/8 text-amber-600 dark:text-amber-400 hover:bg-amber-500/12"
                   : "border-border-subtle text-faint hover:border-border hover:text-muted"
