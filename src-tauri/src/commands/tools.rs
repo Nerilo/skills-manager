@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::State;
 
 use crate::core::error::AppError;
@@ -8,6 +10,7 @@ use crate::core::scenario_service;
 use crate::core::scenario_service::sync_scenario_skills;
 use crate::core::skill_store::SkillStore;
 use crate::core::sync_engine;
+use crate::core::timing::should_log_first_or_slow;
 use crate::core::tool_adapters::{self, CustomToolDef};
 use crate::core::tool_service::{
     self, get_custom_tool_paths, get_custom_tools, get_disabled_tools, get_tool_order,
@@ -53,13 +56,18 @@ fn reconcile_tool_sync_after_path_change(store: &SkillStore, tool_key: &str) {
     }
 }
 
+static GET_TOOL_STATUS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
+
 #[tauri::command]
 pub async fn get_tool_status(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<ToolInfoDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result: Vec<ToolInfoDto> = tool_service::list_tool_info(&store)
+        let start = Instant::now();
+        let infos = tool_service::list_tool_info(&store);
+        let count = infos.len();
+        let result: Vec<ToolInfoDto> = infos
             .into_iter()
             .map(|info: ToolInfo| ToolInfoDto {
                 runtime_environment: info.runtime_environment,
@@ -74,6 +82,10 @@ pub async fn get_tool_status(
                 project_relative_skills_dir: info.project_relative_skills_dir,
             })
             .collect();
+        let elapsed_ms = start.elapsed().as_millis();
+        if should_log_first_or_slow(&GET_TOOL_STATUS_FIRST_CALL, elapsed_ms, 100) {
+            log::info!("get_tool_status: {count} tools in {elapsed_ms} ms");
+        }
         Ok(result)
     })
     .await?

@@ -685,6 +685,7 @@ mod tests {
                 status: "ok".to_string(),
                 synced_at: Some(now),
                 last_error: None,
+                source_hash: None,
             })
             .unwrap();
         store

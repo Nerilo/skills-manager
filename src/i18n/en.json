@@ -481,7 +481,7 @@
     "diagnosticsCopied": "Diagnostic info copied. Paste it into the GitHub issue.",
     "diagnosticsCopyManual": "Could not access clipboard — please copy the info below manually:",
     "exportLogs": "Export Logs",
-    "exportLogsHint": "Bundle recent logs as a zip in your Downloads folder",
+    "exportLogsHint": "Bundle recent logs and activity history as a zip in your Downloads folder",
     "exportLogsDone": "Logs exported ({{count}} file(s)). Drag the zip into your GitHub issue.",
     "exportLogsFailed": "Failed to export logs.",
     "panicBanner": "Skills Manager crashed during the last session ({{time}}).",

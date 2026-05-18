@@ -446,7 +446,7 @@
     "diagnosticsCopied": "診斷資訊已複製，請貼到 GitHub issue 中。",
     "diagnosticsCopyManual": "無法存取剪貼簿，請手動複製下方資訊：",
     "exportLogs": "匯出日誌",
-    "exportLogsHint": "把最近日誌打包成 zip 儲存到下載資料夾",
+    "exportLogsHint": "把最近日誌和操作紀錄打包成 zip 儲存到下載資料夾",
     "exportLogsDone": "已匯出日誌（{{count}} 個檔案），請把 zip 拖到 GitHub issue 附件區。",
     "exportLogsFailed": "匯出日誌失敗。",
     "panicBanner": "上次執行 Skills Manager 時發生崩潰（{{time}}）。",

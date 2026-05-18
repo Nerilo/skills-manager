@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::State;
 
 use crate::core::{
@@ -8,6 +10,7 @@ use crate::core::{
     scenario_service,
     skill_store::{ScenarioRecord, SkillStore},
     sync_engine, sync_metadata,
+    timing::should_log_first_or_slow,
 };
 
 fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
@@ -71,24 +74,32 @@ pub struct PresetDto {
     pub updated_at: i64,
 }
 
+static GET_PRESETS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
+
 #[tauri::command]
 pub async fn get_presets(store: State<'_, Arc<SkillStore>>) -> Result<Vec<PresetDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let start = Instant::now();
         let scenarios = store.get_all_scenarios().map_err(AppError::db)?;
+        let count = scenarios.len();
         let mut result = Vec::new();
         for s in scenarios {
-            let count = store.count_skills_for_scenario(&s.id).unwrap_or(0);
+            let skill_count = store.count_skills_for_scenario(&s.id).unwrap_or(0);
             result.push(PresetDto {
                 id: s.id,
                 name: s.name,
                 description: s.description,
                 icon: s.icon,
                 sort_order: s.sort_order,
-                skill_count: count,
+                skill_count,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             });
+        }
+        let elapsed_ms = start.elapsed().as_millis();
+        if should_log_first_or_slow(&GET_PRESETS_FIRST_CALL, elapsed_ms, 100) {
+            log::info!("get_presets: {count} presets in {elapsed_ms} ms");
         }
         Ok(result)
     })

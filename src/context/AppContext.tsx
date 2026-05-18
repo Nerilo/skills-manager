@@ -208,7 +208,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     async function init() {
+      // Both events log performance.now() (ms since timeOrigin) so the
+      // reader can compute duration as done - start. Keeping the unit
+      // identical to the other frontend startup marks avoids ambiguity in
+      // the log file (see codex review note on #153).
+      api.logStartupEvent("refresh_app_data_start", performance.now()).catch(() => {});
       await refreshAppData();
+      api.logStartupEvent("refresh_app_data_done", performance.now()).catch(() => {});
       // Apply saved text size on startup
       const savedSize = await api.getSettings("text_size").catch(() => null);
       if (savedSize) {

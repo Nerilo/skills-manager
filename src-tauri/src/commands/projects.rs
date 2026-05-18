@@ -1,10 +1,13 @@
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::Serialize;
 use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
+use crate::core::timing::should_log_first_or_slow;
 use crate::core::{
     error::AppError, installer, project_scanner, skill_distribution, sync_engine, tool_adapters,
 };
@@ -512,17 +515,26 @@ pub(crate) fn classify_sync_status(
     }
 }
 
+static GET_PROJECTS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
+
 #[tauri::command]
 pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<ProjectDto>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let start = Instant::now();
         let records = store.get_all_projects().map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let configs = agent_skill_configs(&store);
-        Ok(records
+        let count = records.len();
+        let dtos: Vec<ProjectDto> = records
             .iter()
             .map(|r| project_to_dto(r, &all_managed, &configs))
-            .collect())
+            .collect();
+        let elapsed_ms = start.elapsed().as_millis();
+        if should_log_first_or_slow(&GET_PROJECTS_FIRST_CALL, elapsed_ms, 100) {
+            log::info!("get_projects: {count} projects in {elapsed_ms} ms");
+        }
+        Ok(dtos)
     })
     .await?
 }

@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{Emitter, Manager};
 
 pub mod commands;
@@ -332,11 +333,15 @@ pub fn quit_app(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let store = core::app_state::initialize_store().expect("Failed to initialize app state");
+    let pre_builder_start = Instant::now();
+    let (store, startup_timings) =
+        core::app_state::initialize_store().expect("Failed to initialize app state");
+    let pre_builder_ms = pre_builder_start.elapsed().as_millis();
     let store_for_setup = store.clone();
 
     let cancel_registry = Arc::new(core::install_cancel::InstallCancelRegistry::new());
 
+    let builder_start = Instant::now();
     tauri::Builder::default()
         .manage(store)
         .manage(cancel_registry)
@@ -349,6 +354,11 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
+            // Snapshot the builder->setup gap BEFORE doing any work in setup,
+            // so the label reflects only the time Tauri spent constructing
+            // the App between Builder::default() and invoking this callback.
+            let builder_to_setup_ms = builder_start.elapsed().as_millis();
+            let setup_start = Instant::now();
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(log::LevelFilter::Info)
@@ -379,15 +389,34 @@ pub fn run() {
                 std::env::consts::OS,
                 std::env::consts::ARCH
             );
+            log::info!(
+                "startup: pre_builder {} ms, builder_to_setup {} ms",
+                pre_builder_ms,
+                builder_to_setup_ms
+            );
+            startup_timings.log();
 
+            let step = Instant::now();
             if is_tray_icon_enabled(&store_for_setup) {
                 ensure_tray_icon(app.handle())?;
+                log::info!(
+                    "startup: ensure_tray_icon done in {} ms",
+                    step.elapsed().as_millis()
+                );
+            } else {
+                log::info!("startup: tray icon disabled");
             }
 
+            let step = Instant::now();
             core::file_watcher::start_file_watcher(app.handle().clone(), store_for_setup.clone());
+            log::info!(
+                "startup: start_file_watcher done in {} ms",
+                step.elapsed().as_millis()
+            );
 
             // Intercept window close — let frontend decide (close vs hide to tray)
             // When QUITTING is set, allow the close to proceed so the process fully exits.
+            let step = Instant::now();
             let win = app.get_webview_window("main").unwrap();
             let win_for_event = win.clone();
             win.on_window_event(move |event| {
@@ -399,6 +428,15 @@ pub fn run() {
                     api.prevent_close();
                 }
             });
+            log::info!(
+                "startup: window handle + close hook in {} ms",
+                step.elapsed().as_millis()
+            );
+
+            log::info!(
+                "startup: setup() body total {} ms",
+                setup_start.elapsed().as_millis()
+            );
 
             Ok(())
         })
@@ -465,6 +503,7 @@ pub fn run() {
             commands::settings::get_diagnostic_info,
             commands::settings::get_recent_log_excerpt,
             commands::settings::export_logs_zip,
+            commands::settings::log_startup_event,
             commands::settings::check_last_panic,
             commands::settings::clear_last_panic,
             commands::settings::app_exit,

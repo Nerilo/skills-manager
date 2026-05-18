@@ -85,27 +85,32 @@ pub async fn sync_skill_to_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
+        let outcome = (|| -> Result<(), AppError> {
+            sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
 
-        if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-            let skill_ids = store
-                .get_skill_ids_for_scenario(&active_id)
-                .map_err(AppError::db)?;
-            if skill_ids.contains(&skill_id) {
-                let adapter_keys: Vec<String> = tool_adapters::enabled_installed_adapters(&store)
-                    .iter()
-                    .map(|a| a.key.clone())
-                    .collect();
-                store
-                    .ensure_scenario_skill_tool_defaults(&active_id, &skill_id, &adapter_keys)
+            if let Ok(Some(active_id)) = store.get_active_scenario_id() {
+                let skill_ids = store
+                    .get_skill_ids_for_scenario(&active_id)
                     .map_err(AppError::db)?;
-                store
-                    .set_scenario_skill_tool_enabled(&active_id, &skill_id, &tool, true)
-                    .map_err(AppError::db)?;
+                if skill_ids.contains(&skill_id) {
+                    let adapter_keys: Vec<String> =
+                        tool_adapters::enabled_installed_adapters(&store)
+                            .iter()
+                            .map(|a| a.key.clone())
+                            .collect();
+                    store
+                        .ensure_scenario_skill_tool_defaults(&active_id, &skill_id, &adapter_keys)
+                        .map_err(AppError::db)?;
+                    store
+                        .set_scenario_skill_tool_enabled(&active_id, &skill_id, &tool, true)
+                        .map_err(AppError::db)?;
+                }
             }
-        }
 
-        Ok(())
+            Ok(())
+        })();
+        log_sync_outcome(&store, "enable", &skill_id, &tool, outcome.as_ref());
+        outcome
     })
     .await?
 }
@@ -118,9 +123,36 @@ pub async fn unsync_skill_from_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        unsync_skill_from_tool_internal(&store, &skill_id, &tool)
+        let outcome = (|| -> Result<(), AppError> {
+            unsync_skill_from_tool_internal(&store, &skill_id, &tool)
+        })();
+        log_sync_outcome(&store, "disable", &skill_id, &tool, outcome.as_ref());
+        outcome
     })
     .await?
+}
+
+fn log_sync_outcome(
+    store: &SkillStore,
+    action: &str,
+    skill_id: &str,
+    tool: &str,
+    outcome: Result<&(), &AppError>,
+) {
+    let name = store
+        .get_skill_by_id(skill_id)
+        .ok()
+        .flatten()
+        .map(|s| s.name)
+        .unwrap_or_default();
+    let mut draft = crate::core::audit_log::AuditDraft::new(action)
+        .skill(skill_id.to_string(), name)
+        .tool(tool.to_string());
+    draft = match outcome {
+        Ok(_) => draft.ok(),
+        Err(e) => draft.fail(e.to_string()),
+    };
+    store.log_audit(draft);
 }
 
 #[tauri::command]

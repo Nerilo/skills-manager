@@ -33,6 +33,25 @@ pub async fn get_settings(
         .await?
 }
 
+/// Diagnostic-only: let the frontend write a named startup event with elapsed
+/// milliseconds into the backend log file. Used to correlate WebView2 boot,
+/// first paint, and refreshAppData timing with Rust-side startup logs when
+/// debugging slow launches (see issue #153).
+///
+/// `label` is sanitized (control chars stripped, capped at 64 chars) so a
+/// buggy or malicious caller cannot inject newlines that would corrupt the
+/// log file layout.
+#[tauri::command]
+pub fn log_startup_event(label: String, elapsed_ms: u64) {
+    let sanitized: String = label.chars().filter(|c| !c.is_control()).take(64).collect();
+    let display = if sanitized.is_empty() {
+        "(empty)".to_string()
+    } else {
+        sanitized
+    };
+    log::info!("frontend startup: {display} {elapsed_ms} ms");
+}
+
 #[tauri::command]
 pub async fn set_settings(
     app: tauri::AppHandle,
@@ -527,7 +546,10 @@ pub struct LogExportResult {
 }
 
 #[tauri::command]
-pub async fn export_logs_zip(app: tauri::AppHandle) -> Result<LogExportResult, AppError> {
+pub async fn export_logs_zip(
+    app: tauri::AppHandle,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<LogExportResult, AppError> {
     use std::io::{Read, Write};
 
     let log_dir = app
@@ -541,6 +563,7 @@ pub async fn export_logs_zip(app: tauri::AppHandle) -> Result<LogExportResult, A
     let os = std::env::consts::OS.to_string();
     let arch = std::env::consts::ARCH.to_string();
     let os_version = detect_os_version();
+    let store = store.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         let downloads = dirs::download_dir()
@@ -573,8 +596,24 @@ pub async fn export_logs_zip(app: tauri::AppHandle) -> Result<LogExportResult, A
         }
         let panic_path = log_dir.join("last_panic.log");
 
+        // Serialize the audit log to JSONL ahead of writing the zip so we can
+        // report the entry count in diagnostics.md. String fields go through
+        // log_sanitize so credentialed URLs / home paths captured in failure
+        // details do not leak when the user attaches the zip to a public issue.
+        let audit_entries = store.list_audit(None).unwrap_or_default();
+        let mut audit_jsonl = String::with_capacity(audit_entries.len() * 96);
+        for entry in &audit_entries {
+            let mut sanitized = entry.clone();
+            sanitized.skill_name = sanitized.skill_name.as_deref().map(log_sanitize::sanitize);
+            sanitized.detail = sanitized.detail.as_deref().map(log_sanitize::sanitize);
+            if let Ok(line) = serde_json::to_string(&sanitized) {
+                audit_jsonl.push_str(&line);
+                audit_jsonl.push('\n');
+            }
+        }
+
         let diagnostics = format!(
-            "# Diagnostics\n\nExported: {ts}\n\n- App version: `{ver}`\n- OS: `{os} {osver} ({arch})`\n- Central repo: `{repo}`{custom}\n- Log files included: {count}\n",
+            "# Diagnostics\n\nExported: {ts}\n\n- App version: `{ver}`\n- OS: `{os} {osver} ({arch})`\n- Central repo: `{repo}`{custom}\n- Log files included: {count}\n- Audit entries included: {audit}\n",
             ts = chrono::Local::now().to_rfc3339(),
             ver = app_version,
             os = os,
@@ -583,6 +622,7 @@ pub async fn export_logs_zip(app: tauri::AppHandle) -> Result<LogExportResult, A
             repo = log_sanitize::sanitize(&central_path),
             custom = if central_overridden { " (custom path)" } else { "" },
             count = log_files.len() + if panic_path.exists() { 1 } else { 0 },
+            audit = audit_entries.len(),
         );
 
         let file = std::fs::File::create(&zip_path).map_err(AppError::io)?;
@@ -622,6 +662,13 @@ pub async fn export_logs_zip(app: tauri::AppHandle) -> Result<LogExportResult, A
                 zip.write_all(sanitized.as_bytes()).map_err(AppError::io)?;
                 included += 1;
             }
+        }
+
+        if !audit_jsonl.is_empty() {
+            zip.start_file("audit.jsonl", opts)
+                .map_err(|e| AppError::io(e.to_string()))?;
+            zip.write_all(audit_jsonl.as_bytes())
+                .map_err(AppError::io)?;
         }
 
         zip.finish().map_err(|e| AppError::io(e.to_string()))?;
@@ -795,6 +842,7 @@ mod tests {
             status: "ok".to_string(),
             synced_at: Some(1),
             last_error: None,
+            source_hash: None,
         }
     }
 

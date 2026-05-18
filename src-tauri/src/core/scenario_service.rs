@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::{
     central_repo,
@@ -18,6 +19,11 @@ pub struct ScenarioSyncTarget {
     pub source: PathBuf,
     pub target: PathBuf,
     pub mode: sync_engine::SyncMode,
+    /// Current content hash of the central skill source, copied from
+    /// `SkillRecord.content_hash`. Compared against the previously
+    /// synced `SkillTargetRecord.source_hash` to skip redundant
+    /// Copy-mode resyncs at startup (issue #153).
+    pub source_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +98,7 @@ pub fn collect_scenario_sync_targets(
                 source: source.clone(),
                 target,
                 mode,
+                source_hash: skill.content_hash.clone(),
             });
         }
     }
@@ -163,12 +170,40 @@ fn sync_wsl_library_replicas_for_targets(
     failed
 }
 
+/// Decide which `SyncMode` `is_target_current` should compare against, or
+/// `None` if the existing target's mode is incompatible with the desired
+/// mode and the skip path must be refused.
+///
+/// Returns `Some(existing)` when both modes match exactly. Also returns
+/// `Some(Copy)` when the existing record is `"copy"` but the desired
+/// mode is `Symlink` — this is the Windows fallback case (issue #153):
+/// `symlink_dir()` failed on a prior run and we landed in copy mode, so
+/// every subsequent startup would re-attempt symlink, fail again, and
+/// trigger a full recursive copy. Treating the existing copy as
+/// compatible lets the hash gate skip when the source hasn't changed.
+///
+/// The reverse direction (existing `"symlink"`, desired `Copy`) returns
+/// `None` because the user actively changed the `sync_mode` setting and
+/// the on-disk symlink doesn't reflect that intent.
+fn skip_check_mode(
+    existing_mode: &str,
+    desired: sync_engine::SyncMode,
+) -> Option<sync_engine::SyncMode> {
+    match (existing_mode, desired) {
+        ("symlink", sync_engine::SyncMode::Symlink) => Some(sync_engine::SyncMode::Symlink),
+        ("symlink", sync_engine::SyncMode::WslSymlink) => Some(sync_engine::SyncMode::WslSymlink),
+        ("copy", sync_engine::SyncMode::Copy) => Some(sync_engine::SyncMode::Copy),
+        ("copy", sync_engine::SyncMode::Symlink) => Some(sync_engine::SyncMode::Copy),
+        _ => None,
+    }
+}
+
 pub fn sync_desired_targets(
     store: &SkillStore,
     desired_targets: &[ScenarioSyncTarget],
 ) -> Result<(), AppError> {
     let failed_wsl_replicas = sync_wsl_library_replicas_for_targets(store, desired_targets);
-
+    let batch_start = Instant::now();
     let existing_targets: HashMap<(String, String), SkillTargetRecord> = store
         .get_all_targets()
         .map_err(AppError::db)?
@@ -176,13 +211,19 @@ pub fn sync_desired_targets(
         .map(|target| ((target.skill_id.clone(), target.tool.clone()), target))
         .collect();
 
+    let mut synced_count = 0usize;
+    let mut skipped_count = 0usize;
+    let mut failed_count = 0usize;
+
     for desired in desired_targets {
+        let target_start = Instant::now();
         if let Some((distro_name, _agent_key)) = wsl_runtime::parse_wsl_tool_key(&desired.tool) {
             if failed_wsl_replicas.contains_key(distro_name) {
                 log::warn!(
                     "Skipping WSL target {} because its Library Replica failed to sync",
                     desired.target.display()
                 );
+                failed_count += 1;
                 continue;
             }
         }
@@ -204,11 +245,34 @@ pub fn sync_desired_targets(
                         desired.tool
                     );
                 }
-            } else if existing.mode == desired.mode.as_str()
-                && existing.status == "ok"
-                && sync_engine::is_target_current(&desired.source, &desired.target, desired.mode)
-            {
-                continue;
+            } else if existing.status == "ok" {
+                if let Some(check_mode) = skip_check_mode(&existing.mode, desired.mode) {
+                    if sync_engine::is_target_current(
+                        &desired.source,
+                        &desired.target,
+                        check_mode,
+                        existing.source_hash.as_deref(),
+                        desired.source_hash.as_deref(),
+                    ) {
+                        // Surface the Windows fallback case in logs so operators
+                        // can tell when a target is permanently on Copy because
+                        // an earlier symlink_dir() failed (issue #153). Helpful
+                        // when a user later enables Developer Mode and wonders
+                        // why Symlink isn't being re-attempted.
+                        if existing.mode == "copy"
+                            && matches!(desired.mode, sync_engine::SyncMode::Symlink)
+                        {
+                            log::debug!(
+                                "sync_desired_targets: skill {} ({}) staying on copy fallback for {} (content unchanged); trigger a manual resync to retry symlink",
+                                desired.skill_id,
+                                desired.skill_name,
+                                desired.tool
+                            );
+                        }
+                        skipped_count += 1;
+                        continue;
+                    }
+                }
             }
         }
 
@@ -224,6 +288,10 @@ pub fn sync_desired_targets(
                     status: "ok".to_string(),
                     synced_at: Some(now),
                     last_error: None,
+                    // Record the hash that was just synced so the next
+                    // run of this loop can short-circuit when the central
+                    // skill content has not changed (issue #153).
+                    source_hash: desired.source_hash.clone(),
                 };
                 if let Err(e) = store.insert_target(&target_record) {
                     log::warn!(
@@ -231,12 +299,26 @@ pub fn sync_desired_targets(
                         desired.skill_id
                     );
                 }
+                synced_count += 1;
+                let elapsed = target_start.elapsed().as_millis();
+                if elapsed >= 200 {
+                    log::warn!(
+                        "sync_desired_targets: slow sync ({elapsed} ms, mode={}) for skill {} ({}) -> {}",
+                        actual_mode.as_str(),
+                        desired.skill_id,
+                        desired.skill_name,
+                        desired.target.display()
+                    );
+                }
             }
             Err(e) => {
+                failed_count += 1;
                 log::warn!(
-                    "Failed to sync skill {} to {}: {e}",
+                    "Failed to sync skill {} ({}) to {} after {} ms: {e}",
                     desired.skill_id,
-                    desired.target.display()
+                    desired.skill_name,
+                    desired.target.display(),
+                    target_start.elapsed().as_millis()
                 );
             }
         }
@@ -253,6 +335,12 @@ pub fn sync_desired_targets(
             failures.join("; ")
         )));
     }
+
+    log::info!(
+        "sync_desired_targets: {} targets in {} ms (synced={synced_count}, skipped={skipped_count}, failed={failed_count})",
+        desired_targets.len(),
+        batch_start.elapsed().as_millis()
+    );
 
     Ok(())
 }
@@ -395,6 +483,7 @@ pub fn sync_skill_to_active_scenario(
                             status: "ok".to_string(),
                             synced_at: Some(now),
                             last_error: None,
+                            source_hash: skill.content_hash.clone(),
                         };
                         if let Err(e) = store.insert_target(&target_record) {
                             log::warn!("Failed to insert sync target for skill {skill_id}: {e}");
@@ -569,6 +658,7 @@ pub fn sync_single_skill_to_tool(
         status: "ok".to_string(),
         synced_at: Some(now),
         last_error: None,
+        source_hash: skill.content_hash.clone(),
     };
 
     store.insert_target(&target_record).map_err(AppError::db)?;
@@ -827,5 +917,203 @@ mod tests {
             "{}",
             wsl_target.target_path
         );
+    }
+}
+
+#[cfg(test)]
+mod sync_desired_targets_tests {
+    use super::*;
+    use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn copy_fallback_target_with_matching_hash_is_skipped() {
+        let _lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+
+        let source = central_repo::skills_dir().join("skill-a");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "real source").unwrap();
+
+        let target = tmp.path().join("agent-skills").join("skill-a");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("MARKER.txt"), "do not wipe me").unwrap();
+
+        let skill = SkillRecord {
+            id: "skill-a".to_string(),
+            name: "skill-a".to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(source.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: source.to_string_lossy().to_string(),
+            content_hash: Some("h1".to_string()),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        store.insert_skill(&skill).unwrap();
+
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "target-1".to_string(),
+                skill_id: "skill-a".to_string(),
+                tool: "claude-code".to_string(),
+                target_path: target.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: Some("h1".to_string()),
+            })
+            .unwrap();
+
+        let desired = vec![ScenarioSyncTarget {
+            skill_id: "skill-a".to_string(),
+            skill_name: "skill-a".to_string(),
+            tool: "claude-code".to_string(),
+            source: source.clone(),
+            target: target.clone(),
+            mode: sync_engine::SyncMode::Symlink,
+            source_hash: Some("h1".to_string()),
+        }];
+
+        sync_desired_targets(&store, &desired).unwrap();
+
+        assert!(
+            target.join("MARKER.txt").exists(),
+            "target dir was wiped, skip did not fire"
+        );
+        assert!(
+            !target.join("SKILL.md").exists(),
+            "SKILL.md appeared, sync ran instead of skipping"
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+
+    #[test]
+    fn deleted_target_with_matching_hash_forces_resync() {
+        let _lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        central_repo::set_test_base_dir_override(Some(base.clone()));
+        fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let store = SkillStore::new(&base.join("test.db")).unwrap();
+
+        let source = central_repo::skills_dir().join("skill-b");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "real source").unwrap();
+        let target = tmp.path().join("agent-skills").join("skill-b");
+
+        let skill = SkillRecord {
+            id: "skill-b".to_string(),
+            name: "skill-b".to_string(),
+            description: None,
+            source_type: "import".to_string(),
+            source_ref: Some(source.to_string_lossy().to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: source.to_string_lossy().to_string(),
+            content_hash: Some("h1".to_string()),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        store.insert_skill(&skill).unwrap();
+
+        store
+            .insert_target(&SkillTargetRecord {
+                id: "target-2".to_string(),
+                skill_id: "skill-b".to_string(),
+                tool: "claude-code".to_string(),
+                target_path: target.to_string_lossy().to_string(),
+                mode: "copy".to_string(),
+                status: "ok".to_string(),
+                synced_at: Some(1),
+                last_error: None,
+                source_hash: Some("h1".to_string()),
+            })
+            .unwrap();
+
+        let desired = vec![ScenarioSyncTarget {
+            skill_id: "skill-b".to_string(),
+            skill_name: "skill-b".to_string(),
+            tool: "claude-code".to_string(),
+            source: source.clone(),
+            target: target.clone(),
+            mode: sync_engine::SyncMode::Copy,
+            source_hash: Some("h1".to_string()),
+        }];
+
+        sync_desired_targets(&store, &desired).unwrap();
+
+        assert!(
+            target.join("SKILL.md").exists(),
+            "missing target was not re-synced"
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
+}
+
+#[cfg(test)]
+mod skip_check_mode_tests {
+    use super::skip_check_mode;
+    use super::sync_engine::SyncMode;
+
+    #[test]
+    fn matching_modes_are_compatible() {
+        assert!(matches!(
+            skip_check_mode("symlink", SyncMode::Symlink),
+            Some(SyncMode::Symlink)
+        ));
+        assert!(matches!(
+            skip_check_mode("symlink", SyncMode::WslSymlink),
+            Some(SyncMode::WslSymlink)
+        ));
+        assert!(matches!(
+            skip_check_mode("copy", SyncMode::Copy),
+            Some(SyncMode::Copy)
+        ));
+    }
+
+    #[test]
+    fn copy_existing_with_symlink_desired_treated_as_copy() {
+        assert!(matches!(
+            skip_check_mode("copy", SyncMode::Symlink),
+            Some(SyncMode::Copy)
+        ));
+    }
+
+    #[test]
+    fn symlink_existing_with_copy_desired_is_incompatible() {
+        assert!(skip_check_mode("symlink", SyncMode::Copy).is_none());
+    }
+
+    #[test]
+    fn unknown_existing_mode_is_incompatible() {
+        assert!(skip_check_mode("garbage", SyncMode::Symlink).is_none());
+        assert!(skip_check_mode("", SyncMode::Copy).is_none());
     }
 }

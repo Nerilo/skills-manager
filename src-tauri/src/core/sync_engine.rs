@@ -67,7 +67,10 @@ pub fn target_dir_name(central_path: &Path, skill_name: &str) -> String {
 }
 
 pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMode> {
-    if is_target_current(source, target, mode) {
+    // Internal self-check uses no hash context, so Copy mode always
+    // proceeds — the caller (e.g. `sync_desired_targets`) is the place
+    // that knows about freshness and can short-circuit.
+    if is_target_current(source, target, mode, None, None) {
         return Ok(mode);
     }
 
@@ -412,12 +415,32 @@ fn next_unmarked_replica_backup_path(library_replica: &Path) -> Result<PathBuf> 
     unreachable!("unbounded backup suffix search should always return")
 }
 
-pub fn is_target_current(source: &Path, target: &Path, mode: SyncMode) -> bool {
+/// Decide whether the existing target is already in the desired state.
+///
+/// - **Symlink modes**: the target must be a symlink pointing at `source`.
+/// - **Copy mode**: the target must still exist on disk **and** the
+///   previously synced source hash must equal the current source hash
+///   (both must be `Some`). The existence check protects against a
+///   user manually deleting the synced directory between sessions —
+///   without it a stale hash would cause us to skip a re-copy the
+///   user needs. Callers without hash context should pass `None`,
+///   which preserves the historical "always recopy" behavior. See
+///   `SkillTargetRecord.source_hash` and issue #153 for context.
+pub fn is_target_current(
+    source: &Path,
+    target: &Path,
+    mode: SyncMode,
+    last_synced_source_hash: Option<&str>,
+    current_source_hash: Option<&str>,
+) -> bool {
     match mode {
         SyncMode::Symlink | SyncMode::WslSymlink => symlink_points_to(target, source),
-        // Copy mode intentionally refreshes the target because there is no cheap
-        // metadata-backed freshness check for arbitrary skill directory contents.
-        SyncMode::Copy => false,
+        SyncMode::Copy => match (last_synced_source_hash, current_source_hash) {
+            (Some(stored), Some(current)) if stored == current => {
+                std::fs::symlink_metadata(target).is_ok()
+            }
+            _ => false,
+        },
     }
 }
 
@@ -1165,8 +1188,6 @@ mod tests {
         assert!(remove_target(&path).is_ok());
     }
 
-    // ── WSL path detection ──
-
     #[test]
     fn is_wsl_unc_path_matches_wsl_localhost_prefix() {
         assert!(is_wsl_unc_path(Path::new(
@@ -1260,5 +1281,76 @@ mod tests {
             let err = remove_target(Path::new(path)).unwrap_err();
             assert!(err.to_string().contains("safe WSL"), "{path}: {err}");
         }
+    }
+
+    #[test]
+    fn is_target_current_copy_skips_when_hashes_match_and_target_exists() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("source");
+        let tgt = tmp.path().join("target");
+        fs::create_dir_all(&tgt).unwrap();
+        assert!(is_target_current(
+            &src,
+            &tgt,
+            SyncMode::Copy,
+            Some("hash-abc"),
+            Some("hash-abc"),
+        ));
+    }
+
+    #[test]
+    fn is_target_current_copy_resyncs_when_target_missing_even_if_hashes_match() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("source");
+        let tgt = tmp.path().join("target-that-was-deleted");
+        // User deleted the synced directory manually; we must re-copy.
+        assert!(!is_target_current(
+            &src,
+            &tgt,
+            SyncMode::Copy,
+            Some("hash-abc"),
+            Some("hash-abc"),
+        ));
+    }
+
+    #[test]
+    fn is_target_current_copy_resyncs_when_hashes_differ() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("source");
+        let tgt = tmp.path().join("target");
+        fs::create_dir_all(&tgt).unwrap();
+        assert!(!is_target_current(
+            &src,
+            &tgt,
+            SyncMode::Copy,
+            Some("hash-old"),
+            Some("hash-new"),
+        ));
+    }
+
+    #[test]
+    fn is_target_current_copy_resyncs_when_either_hash_missing() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("source");
+        let tgt = tmp.path().join("target");
+        fs::create_dir_all(&tgt).unwrap();
+        // No previously recorded hash → must resync (e.g. row predates v6).
+        assert!(!is_target_current(
+            &src,
+            &tgt,
+            SyncMode::Copy,
+            None,
+            Some("hash-abc"),
+        ));
+        // Source has no current hash → must resync (defensive).
+        assert!(!is_target_current(
+            &src,
+            &tgt,
+            SyncMode::Copy,
+            Some("hash-abc"),
+            None,
+        ));
+        // Both missing → must resync.
+        assert!(!is_target_current(&src, &tgt, SyncMode::Copy, None, None));
     }
 }

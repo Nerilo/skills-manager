@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 4;
+const LATEST_VERSION: u32 = 6;
 
 /// Run all pending migrations on the database.
 ///
@@ -51,6 +51,8 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         1 => migrate_v1_to_v2(conn),
         2 => migrate_v2_to_v3(conn),
         3 => migrate_v3_to_v4(conn),
+        4 => migrate_v4_to_v5(conn),
+        5 => migrate_v5_to_v6(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -96,6 +98,7 @@ fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
             status TEXT DEFAULT 'ok',
             synced_at INTEGER,
             last_error TEXT,
+            source_hash TEXT,
             UNIQUE(skill_id, tool)
         );
 
@@ -240,6 +243,38 @@ fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v4 → v5: Add audit log table — append-only history of user/system actions.
+fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            skill_id TEXT,
+            skill_name TEXT,
+            tool TEXT,
+            success INTEGER NOT NULL,
+            detail TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+        ",
+    )?;
+    Ok(())
+}
+
+/// v5 → v6: Add `source_hash` to `skill_targets`. Lets the sync engine
+/// skip a Copy-mode resync when the central skill content has not
+/// changed since the last successful sync, avoiding the per-startup
+/// recursive copy that pinned Windows users on issue #153.
+///
+/// Existing rows get NULL, which is treated as "no recorded hash" and
+/// forces one copy on the first post-upgrade sync. No backfill needed.
+fn migrate_v5_to_v6(conn: &Connection) -> Result<()> {
+    add_column_if_missing(conn, "skill_targets", "source_hash", "TEXT")?;
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -307,6 +342,7 @@ mod tests {
         assert!(tables.contains(&"projects".to_string()));
         assert!(tables.contains(&"skill_tags".to_string()));
         assert!(tables.contains(&"scenario_skill_tools".to_string()));
+        assert!(tables.contains(&"audit_log".to_string()));
     }
 
     #[test]
@@ -420,6 +456,17 @@ mod tests {
                 added_at INTEGER,
                 PRIMARY KEY(scenario_id, skill_id)
             );
+            CREATE TABLE skill_targets (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+                tool TEXT NOT NULL,
+                target_path TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT DEFAULT 'ok',
+                synced_at INTEGER,
+                last_error TEXT,
+                UNIQUE(skill_id, tool)
+            );
             PRAGMA user_version = 1;
             ",
         )
@@ -427,6 +474,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         assert!(has_column(&conn, "scenario_skill_tools", "enabled").unwrap());
+        assert!(has_column(&conn, "skill_targets", "source_hash").unwrap());
 
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
