@@ -13,6 +13,19 @@ use crate::core::{
     sync_engine, tool_adapters, wsl_runtime,
 };
 
+fn target_path_equals_skill(target_path: &str, skill_path: &str) -> bool {
+    if target_path == skill_path {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(target_path),
+        std::fs::canonicalize(skill_path),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 fn adapter_for_agent(
     store: &SkillStore,
     agent: &str,
@@ -403,6 +416,47 @@ fn update_agent_local_skill_from_center(
             )
         };
     sync_engine::sync_skill(&source, &target_path, mode).map_err(AppError::io)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_global_local_skill(
+    store: State<'_, Arc<SkillStore>>,
+    agent: String,
+    skill_relative_path: String,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_agent_local_skill(&store, &agent, &skill_relative_path)
+    })
+    .await?
+}
+
+fn delete_agent_local_skill(
+    store: &SkillStore,
+    agent: &str,
+    skill_relative_path: &str,
+) -> Result<(), AppError> {
+    let adapter = adapter_for_agent(store, agent)?;
+    let skill = find_agent_skill(&adapter, skill_relative_path)?;
+
+    let all_managed = store.get_all_skills().unwrap_or_default();
+    let all_targets = store.get_all_targets().unwrap_or_default();
+    if let Some(managed) = find_verified_center_match(&skill, &all_managed, &all_targets) {
+        let still_linked = all_targets
+            .iter()
+            .any(|t| t.skill_id == managed.id && target_path_equals_skill(&t.target_path, &skill.path));
+        if still_linked {
+            return Err(AppError::invalid_input(
+                "Skill is managed by Skills Center — remove from the agent first.",
+            ));
+        }
+    }
+
+    let skills_root = adapter.skills_dir();
+    let target_path = PathBuf::from(&skill.path);
+    ensure_agent_skill_path(&target_path, &skills_root)?;
+    sync_engine::remove_target(&target_path).map_err(AppError::io)?;
     Ok(())
 }
 

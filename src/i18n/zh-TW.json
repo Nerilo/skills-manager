@@ -20,7 +20,7 @@
     "items": {
       "workflows": {
         "title": "推薦工作流程",
-        "description": "單一 Agent 用戶：安裝 Skills → 開啟全域工作區 → 點擊 Preset 標籤啟用。多專案用戶：開啟專案工作區，點擊 Preset 標籤為該專案的 Agent 啟用 Skills。多機用戶：在設定頁開啟 Git 備份，把中央倉庫在多台裝置間同步。"
+        "description": "單一 Agent 用戶：安裝 Skills → 開啟全域工作區 → 點擊 Preset 標籤啟用，或點 + 新增 Skills 從技能庫挑選並即時切換目標 Agent。多專案用戶：開啟專案工作區，同樣可用 Preset 標籤或 + 新增 Skills 彈窗為該專案的 Agent 設定 Skills。多機用戶：在設定頁開啟 Git 備份，把中央倉庫在多台裝置間同步。"
       },
       "presets": {
         "title": "Preset",
@@ -31,16 +31,16 @@
         "description": "支援從本機資料夾、Git 倉庫、壓縮檔或市集匯入。支援批次匯入資料夾中的多個 Skill。"
       },
       "sync": {
-        "title": "我的 Skills",
-        "description": "瀏覽所有已安裝的 Skills，支援批次標籤編輯和依 Agent 同步開關。點擊 Skill 卡片上的 Agent 圖示即可一鍵為該 Agent 安裝或移除這個 Skill；點擊卡片本身可查看文件、版本歷史和 Agent 同步詳情。"
+        "title": "技能庫",
+        "description": "瀏覽所有已安裝的 Skills，支援批次標籤編輯和依 Agent 同步開關。可依來源或標籤篩選，新增的「未標籤」篩選項可快速找出漏打標籤的 Skills。點擊卡片上的 Agent 圖示即可一鍵為該 Agent 安裝或移除這個 Skill；卡片上恆顯示的刪除按鈕可從中央庫整體移除該 Skill。點擊卡片本身可查看文件、版本歷史和 Agent 同步詳情。"
       },
       "global": {
         "title": "全域工作區",
-        "description": "每個 Agent 都有自己的頁面，列出其全域目錄裡的所有 Skills（包括不是透過 Skills Manager 安裝的），與 Agent 實際看到的內容保持一致。可依 Agent 新增或移除 Skills，或透過「全部 Agents」總覽跨所有已安裝 Agent 統一管理。"
+        "description": "每個 Agent 都有自己的頁面，列出其全域目錄裡的所有 Skills（包括不是透過 Skills Manager 安裝的），與 Agent 實際看到的內容保持一致。點 + 新增 Skills 即可從中央庫挑選，並透過內嵌的 Agent 標籤選擇目標；也可透過「全部 Agents」總覽跨所有已安裝 Agent 統一管理。只存在於某個 Agent 目錄的 Skills 可直接在卡片上刪除。"
       },
       "projects": {
         "title": "專案工作區",
-        "description": "關聯專案後，可以檢視專案內各 Agent 的本地 Skills 目錄、對照中央倉庫，並依需求雙向匯入或匯出。使用 Preset 標籤啟用技能組，或單獨新增 Skills。"
+        "description": "關聯專案後，可以檢視專案內各 Agent 的本地 Skills 目錄、對照中央倉庫，並依需求雙向匯入或匯出。使用 Preset 標籤啟用技能組，或點 + 新增 Skills 透過多 Agent 目標選擇器從技能庫挑選。"
       },
       "backup": {
         "title": "Git 備份",
@@ -48,7 +48,7 @@
       },
       "settings": {
         "title": "設定",
-        "description": "管理 Agent 路徑與開關、自訂 Agent、拖曳調整 Agent 在全應用中的顯示順序、同步模式、主題字級、語言、網路代理、Git 遠端、AI 搜尋 Key，以及應用更新。"
+        "description": "管理 Agent 路徑與開關、自訂 Agent、拖曳調整 Agent 在全應用中的顯示順序、同步模式、主題字級、語言、網路代理、Git 遠端、AI 搜尋 Key，以及應用更新。可用「匯出日誌」把最近日誌與安裝/移除/更新/同步活動打包成壓縮檔，方便提交 Issue。"
       }
     }
   },
@@ -68,13 +68,14 @@
   },
   "dashboard": {
     "greeting": "你好！",
-    "currentPreset": "當前 Preset",
-    "skillsEnabled": "已啟用 {{count}} 個 Skills",
-    "presetSkills": "當前 Preset Skills",
+    "summary": "Library 中 {{skills}} 個 Skills · 已接入 {{agents}} 個 Agent · {{projects}} 個 Project",
+    "librarySkills": "Library Skills",
+    "syncCoverage": "同步覆蓋",
+    "connectedAgents": "已接入 Agent",
     "synced": "已同步",
-    "supportedAgents": "支援 Agent",
+    "notSynced": "未同步",
     "scanImport": "掃描本機 Skills 匯入",
-    "installNew": "安裝新 Skills 到當前 Preset",
+    "installNew": "安裝新 Skills",
     "recentActivity": "近期動態"
   },
   "mySkills": {
@@ -115,7 +116,7 @@
     "presetCount": "{{count}} 個 Preset",
     "syncCoverage": "同步覆蓋",
     "syncSummary": "已同步 {{synced}} / {{total}}",
-    "agentTogglesTitle": "Agent 開關",
+    "agentTogglesTitle": "全域工作區",
     "expandAgentToggles": "展開",
     "collapseAgentToggles": "收起",
     "agentToggleNotInstalled": "未安裝",
@@ -211,6 +212,7 @@
     "tags": {
       "filter": "標籤",
       "allTags": "全部標籤",
+      "untagged": "無標籤",
       "addTag": "新增標籤...",
       "noTags": "無標籤",
       "tagAdded": "標籤已新增",
@@ -429,7 +431,7 @@
     "language": "語言",
     "help": "說明",
     "about": "關於",
-    "version": "Skills Manager 1.20.0",
+    "version": "Skills Manager 1.21.0",
     "tagline": "跨平台。極簡、高效、無感多 Preset 切換。",
     "checkUpdate": "檢查更新",
     "checking": "檢查中…",
@@ -539,7 +541,47 @@
     "rename": "重新命名",
     "save": "儲存",
     "create": "建立",
-    "goToSettings": "設定"
+    "goToSettings": "設定",
+    "expandAll": "展開全部",
+    "collapse": "收合"
+  },
+  "addFromLibrary": {
+    "title": "從技能庫新增",
+    "targetLabel": "目標：",
+    "noTargetSelected": "未選擇",
+    "changeTarget": "更換目標",
+    "selectAllTargets": "全選",
+    "clearTargets": "清空",
+    "searchPlaceholder": "搜尋技能庫…",
+    "emptyLibrary": "技能庫為空",
+    "emptyMatch": "沒有符合的 Skill",
+    "ctaEmpty": "選擇要新增到 {{agent}} 的 Skill",
+    "ctaEmptyProject": "選擇要新增的 Skill（{{count}} 個 Agent）",
+    "ctaGlobal": "新增 {{count}} 個到 {{agent}}",
+    "ctaProject": "新增 {{count}} 個 · {{agentCount}} 個 Agent",
+    "ctaNoTarget": "請先選擇目標 Agent",
+    "toastInstalled": "已新增 {{count}} 個 Skill",
+    "toastFailed": "有 {{count}} 個 Skill 新增失敗",
+    "toastAddedToProject": "已將「{{skill}}」新增到 {{project}}",
+    "toastRemovedFromProject": "已從 {{project}} 移除「{{skill}}」",
+    "add": "新增",
+    "installedShort": "已新增",
+    "projectsTitle": "專案工作區",
+    "projectsSummary": "{{installed}} / {{total}} 已新增",
+    "errors": {
+      "noTarget": "請至少選擇一個目標 Agent"
+    },
+    "status": {
+      "installed": "已新增",
+      "conflict": "名稱衝突",
+      "unavailable": "無目標"
+    },
+    "tooltip": {
+      "installed": "已經在工作區中",
+      "remove": "點擊從此 Agent 移除",
+      "conflict": "請先重新命名庫中的 Skill",
+      "unavailable": "請先選擇目標 Agent"
+    }
   },
   "preset": {
     "create": "新增 Preset",
@@ -743,6 +785,10 @@
       "upload": "上傳",
       "pull": "拉取",
       "removeManaged": "從 Agent 移除",
+      "deleteLocal": "刪除本機 Skill",
+      "deleteLocalConfirmTitle": "刪除本機 Skill？",
+      "deleteLocalConfirmMessage": "從 {{agent}} 中刪除「{{name}}」？此操作會刪除本機檔案且不可復原。",
+      "deletedLocalToast": "已從 {{agent}} 刪除「{{name}}」。",
       "uploadedToast": "已將「{{name}}」上傳到 Skills 中心，未自動同步回 {{agent}}。",
       "pulledToast": "已從 Skills 中心更新 {{agent}} 中的「{{name}}」。",
       "uploadConfirmTitle": "更新中心 Skill？",

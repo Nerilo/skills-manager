@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-05-18
+
+### Added
+- **Add from Library sheet** — In any workspace, click **+ Add Skills** to open a unified picker: search your central library, toggle target agents with always-visible chips (with select-all / clear shortcuts), and batch-add multiple skills in one click.
+- **Untagged filter pill** in the Library tag-filter row to quickly surface skills that haven't been tagged yet.
+- **Delete from agent cards** — In **Global Workspace**, skills that only live inside an agent's directory (not linked from the central library) can now be deleted right from the card. In **Project Workspaces** the per-card delete button is always visible instead of hover-only.
+- **Activity log bundled with Export Logs** — Install / remove / update / sync operations are recorded locally, and **Settings → Export Logs** now packages them together with recent log files into a single zip — much easier to attach when filing an issue.
+- **Startup timing diagnostics** added to logs to help track down slow Windows launches (#153).
+
+### Changed
+- **Dashboard refocused on library-wide state** — The hero replaces the old "Current Preset: …" framing with total library skills, sync coverage, and the actual count of installed-and-enabled agents. Recent activity now pulls from all managed skills.
+- **Faster Copy-mode sync** — Skip the per-file rewrite when the source hash hasn't changed; large libraries (especially on Windows) now resync noticeably faster (#153).
+
+### Fixed
+- **Global Workspace agent reload could get stuck** — A stale "loaded agent" reference is now cleared on cleanup so switching agents always re-fetches.
+- **Project Workspace skill toggles** behave more reliably after changing the target agent set.
+
 ## [1.20.0] - 2026-05-18
 
 ### Added

@@ -44,12 +44,14 @@
 - **Project Workspaces** — View and manage project-local skill folders for supported agents, compare them with your central library, and sync changes in either direction. Supports nested skill directories and per-agent assignment when exporting.
 - **Linked Workspaces** — Point to any directory as a skills root — useful for skills that live outside the default agent paths. Managed as a standalone workspace without participating in global preset sync.
 - **Multi-tool sync** — Sync skills to any supported tool via symlink or copy with a single click. Every skill card shows an agent icon badge per enabled agent — click a badge to install or remove that skill for that agent right from the card, with the badge reflecting live sync state.
+- **Add from Library sheet** — In any workspace, click **+ Add Skills** to open a unified picker: search your central library, toggle target agents with always-visible chips (with select-all/clear), and batch-add multiple skills in one click.
 - **Batch operations** — Multi-select skills for bulk enable/disable, export, or delete. Project Workspaces also support bulk enable/disable for project-local skills.
-- **Skill tagging and filters** — Tag skills, use tags to group similar skills, and filter by source or tag to narrow large libraries quickly.
+- **Skill tagging and filters** — Tag skills, use tags to group similar skills, and filter by source or tag — including an **Untagged** pill to quickly find skills missing labels.
 - **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones.
 - **Skill preview and source inspection** — Read `SKILL.md` / `README.md`, inspect source metadata, and compare local content with the upstream version inside the app.
 - **Custom tools** — Add your own agents/tools with custom skills directories, or override the default path for any built-in tool.
 - **Git backup and restore** — Version-control your skill library with Git for backup and multi-machine sync, then restore snapshot versions from Version History when needed.
+- **Activity log & Export Logs** — Install / remove / update / sync operations are recorded locally. Use **Settings → Export Logs** to bundle recent logs and activity history into a single zip for easier issue reports.
 - **Flexible app settings** — Configure repo path, sync mode, theme, text size, language, tray behavior, proxy, Git remote, update checks, and the order agents appear throughout the app — all in one place.
 
 ## Core Concepts
@@ -68,10 +70,10 @@
 
 1. Install skills from local folders, Git repositories, archives, or the marketplace. If you have a SkillsMP API key, you can also turn on AI search.
 2. Open **Global Workspace** from the sidebar and pick an agent (e.g. Claude Code).
-3. Click a **Preset** pill to activate its skills for that agent. Active presets show a ✓; partial installs show a count badge.
-4. To manage project-local skills, open a **Project Workspace** and use the same preset pills or add skills individually.
+3. Click a **Preset** pill to activate its skills for that agent, or use **+ Add Skills** to pick from your library and toggle target agents inline. Active presets show a ✓; partial installs show a count badge.
+4. To manage project-local skills, open a **Project Workspace** and use the same preset pills or the **+ Add Skills** picker with its multi-agent target selector.
 5. Configure agent paths, custom tools, theme, language, proxy, and Git preferences in **Settings**.
-6. If you want history or multi-machine sync, set a Git remote in **Settings** and run **Start Backup** or **Sync to Git** from **My Skills**.
+6. If you want history or multi-machine sync, set a Git remote in **Settings** and run **Start Backup** or **Sync to Git** from the **Library**.
 
 ## Git Backup
 
@@ -81,14 +83,14 @@ Back up the `skills/` folder inside your current central repository to a Git rep
 
 1. Create a private repository (recommended).
 2. Open **Settings → Git Sync Configuration** and save your remote URL.
-3. Open **My Skills**.
+3. Open **Library**.
 4. Choose one:
 - Existing remote: click **Start Backup** to clone from the configured remote.
 - New local repo: click **Start Backup** to initialize locally, then use **Sync to Git**.
-5. Use **Sync to Git** from the My Skills toolbar.
+5. Use **Sync to Git** from the Library toolbar.
 
 `Sync to Git` automatically handles pull, commit, and push based on current repo status.
-Each successful sync creates a snapshot version tag. You can open **Version History** in **My Skills**, inspect the timeline, and restore any snapshot as a new commit.
+Each successful sync creates a snapshot version tag. You can open **Version History** in the **Library**, inspect the timeline, and restore any snapshot as a new commit.
 
 ### Authentication
 
@@ -105,7 +107,7 @@ You can also add custom tools in **Settings** and manage their skills the same w
 
 ## In-App Help
 
-The **Help** button in **Settings** mirrors the current product flow: recommended workflows, presets, skill installation, the Library, the Global Workspace, Project Workspaces, Git backup, and environment-level settings. It is intended as the in-app version of this quick-start guide.
+The **Help** button in **Settings** mirrors the current product flow: recommended workflows, presets, skill installation, the Library (with the Untagged filter and per-card delete), the Global Workspace and the **+ Add Skills** sheet, Project Workspaces with the multi-agent target picker, Git backup, and environment-level settings (including Export Logs for issue reports). It is intended as the in-app version of this quick-start guide.
 
 ## Tech Stack
 

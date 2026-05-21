@@ -20,7 +20,7 @@
     "items": {
       "workflows": {
         "title": "Recommended Workflows",
-        "description": "Single-agent: install skills → open Global Workspace → click a Preset pill to activate. Multi-project: open a Project Workspace and click a Preset pill to activate skills for that project's agents. Multi-machine: turn on Git Backup in Settings to sync your library across devices."
+        "description": "Single-agent: install skills → open Global Workspace → click a Preset pill to activate, or hit + Add Skills to pick from your library and toggle target agents inline. Multi-project: open a Project Workspace and use the same Preset pills or + Add Skills picker for that project's agents. Multi-machine: turn on Git Backup in Settings to sync your library across devices."
       },
       "presets": {
         "title": "Presets",
@@ -32,15 +32,15 @@
       },
       "sync": {
         "title": "Library",
-        "description": "Browse all installed skills with bulk tag editing and per-agent sync toggles. Click an agent icon on any skill card to install or remove that skill for that agent in one click. Click the card itself to view docs, version history, and agent sync details."
+        "description": "Browse all installed skills with bulk tag editing and per-agent sync toggles. Filter by source or tag — including an Untagged pill to surface skills missing labels. Click an agent icon on any skill card to install or remove that skill for that agent in one click; the always-visible delete button removes a skill from the central library. Click the card itself to view docs, version history, and agent sync details."
       },
       "global": {
         "title": "Global Workspace",
-        "description": "Each agent gets its own page listing every skill in its global folder — including ones installed outside Skills Manager — so the view matches what the agent actually sees. Add or remove skills per agent, or use the All Agents overview to manage every installed agent at once."
+        "description": "Each agent gets its own page listing every skill in its global folder — including ones installed outside Skills Manager — so the view matches what the agent actually sees. Use + Add Skills to pull from your central library with inline target-agent chips, or use the All Agents overview to manage every installed agent at once. Skills that only exist in an agent folder can be deleted directly from the card."
       },
       "projects": {
         "title": "Project Workspaces",
-        "description": "Link a project to browse per-agent local skill folders, compare with the central library, and import or export changes. Use Preset pills to activate skill groups, or add skills individually."
+        "description": "Link a project to browse per-agent local skill folders, compare with the central library, and import or export changes. Use Preset pills to activate skill groups, or open + Add Skills to pick from your library with a multi-agent target picker."
       },
       "backup": {
         "title": "Git Backup",
@@ -48,7 +48,7 @@
       },
       "settings": {
         "title": "Settings",
-        "description": "Manage agent paths and toggles, add custom agents, drag to reorder how agents appear across the app, change sync mode, theme, text size, language, proxy, Git remote, AI search key, and check for app updates."
+        "description": "Manage agent paths and toggles, add custom agents, drag to reorder how agents appear across the app, change sync mode, theme, text size, language, proxy, Git remote, AI search key, and check for app updates. Use Export Logs to bundle recent logs and install/remove/update/sync activity into a single zip when filing an issue."
       }
     }
   },
@@ -68,11 +68,12 @@
   },
   "dashboard": {
     "greeting": "Hello!",
-    "currentPreset": "Current Preset",
-    "skillsEnabled": "{{count}} Skills enabled",
-    "presetSkills": "Preset Skills",
+    "summary": "{{skills}} Skills in Library · {{agents}} Agents connected · {{projects}} Projects",
+    "librarySkills": "Library Skills",
+    "syncCoverage": "Sync Coverage",
+    "connectedAgents": "Connected Agents",
     "synced": "Synced",
-    "supportedAgents": "Agents",
+    "notSynced": "Not synced",
     "scanImport": "Scan & Import Local Skills",
     "installNew": "Install New Skills",
     "recentActivity": "Recent Activity"
@@ -178,7 +179,7 @@
     "agentCount": "{{count}} agents",
     "ready": "Ready",
     "standby": "Standby",
-    "agentTogglesTitle": "Agent Toggles",
+    "agentTogglesTitle": "Global Workspace",
     "expandAgentToggles": "Expand",
     "collapseAgentToggles": "Collapse",
     "agentToggleEnabled": "{{agent}} enabled",
@@ -227,6 +228,7 @@
     "tags": {
       "filter": "Tags",
       "allTags": "All Tags",
+      "untagged": "Untagged",
       "addTag": "Add tag...",
       "noTags": "No tags",
       "tagAdded": "Tag added",
@@ -464,7 +466,7 @@
     "language": "Language",
     "help": "Help",
     "about": "About",
-    "version": "Skills Manager 1.20.0",
+    "version": "Skills Manager 1.21.0",
     "tagline": "Cross-platform. Minimal, efficient, seamless multi-preset switching.",
     "checkUpdate": "Check for Updates",
     "checking": "Checking…",
@@ -598,7 +600,47 @@
     "save": "Save",
     "create": "Create",
     "search": "Search",
-    "goToSettings": "Settings"
+    "goToSettings": "Settings",
+    "expandAll": "Show all",
+    "collapse": "Collapse"
+  },
+  "addFromLibrary": {
+    "title": "Add from Library",
+    "targetLabel": "Target:",
+    "noTargetSelected": "no target",
+    "changeTarget": "Change target",
+    "selectAllTargets": "Select all",
+    "clearTargets": "Clear",
+    "searchPlaceholder": "Search the library…",
+    "emptyLibrary": "Your library is empty",
+    "emptyMatch": "No skills match",
+    "ctaEmpty": "Pick skills to add to {{agent}}",
+    "ctaEmptyProject": "Pick skills to add ({{count}} agents)",
+    "ctaGlobal": "Add {{count}} to {{agent}}",
+    "ctaProject": "Add {{count}} · {{agentCount}} agents",
+    "ctaNoTarget": "Select target agents first",
+    "toastInstalled": "{{count}} skill(s) added",
+    "toastFailed": "{{count}} skill(s) failed to add",
+    "toastAddedToProject": "Added \"{{skill}}\" to {{project}}",
+    "toastRemovedFromProject": "Removed \"{{skill}}\" from {{project}}",
+    "add": "Add",
+    "installedShort": "Added",
+    "projectsTitle": "Project Workspaces",
+    "projectsSummary": "{{installed}} / {{total}} installed",
+    "errors": {
+      "noTarget": "Select at least one target agent"
+    },
+    "status": {
+      "installed": "Installed",
+      "conflict": "Name conflict",
+      "unavailable": "No target"
+    },
+    "tooltip": {
+      "installed": "Already in the workspace",
+      "remove": "Click to remove from this agent",
+      "conflict": "Rename the skill in your library first",
+      "unavailable": "Select a target agent first"
+    }
   },
   "preset": {
     "create": "New Preset",
@@ -813,6 +855,10 @@
       "upload": "Upload",
       "pull": "Pull",
       "removeManaged": "Remove from agent",
+      "deleteLocal": "Delete local skill",
+      "deleteLocalConfirmTitle": "Delete local skill?",
+      "deleteLocalConfirmMessage": "Delete \"{{name}}\" from {{agent}}? This removes the local files and cannot be undone.",
+      "deletedLocalToast": "Deleted \"{{name}}\" from {{agent}}.",
       "uploadedToast": "Uploaded \"{{name}}\" to Skills Center. It was not synced back to {{agent}}.",
       "pulledToast": "Updated \"{{name}}\" from Skills Center in {{agent}}.",
       "uploadConfirmTitle": "Update center skill?",

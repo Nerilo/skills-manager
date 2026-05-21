@@ -1,3 +1,5 @@
+export const UNTAGGED_FILTER = "__untagged__";
+
 const TAG_COLOR_CLASSES = [
   "bg-blue-500/15 text-blue-600 dark:text-blue-400",
   "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",

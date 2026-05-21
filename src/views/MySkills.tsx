@@ -21,6 +21,7 @@ import {
   SquareCheck,
   Square,
   GripVertical,
+  CircleSlash,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -37,7 +38,7 @@ import { GitSetupDialog } from "../components/GitSetupDialog";
 import { GitRecoveryDialog } from "../components/GitRecoveryDialog";
 import { SyncDots } from "../components/SyncDots";
 import * as api from "../lib/tauri";
-import { getTagActiveColor, getTagColor } from "../lib/skillTags";
+import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -135,6 +136,8 @@ export function MySkills() {
     detailSkillId,
     openSkillDetailById,
     closeSkillDetail,
+    projects,
+    refreshProjects,
   } = useApp();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
@@ -230,7 +233,12 @@ export function MySkills() {
 
       if (sourceFilters.size > 0 && !sourceFilters.has(skill.source_type)) return false;
 
-      if (tagFilters.size > 0 && !skill.tags.some((t) => tagFilters.has(t))) return false;
+      if (tagFilters.size > 0) {
+        const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
+        const matchUntagged = wantUntagged && skill.tags.length === 0;
+        const matchTag = skill.tags.some((t) => tagFilters.has(t));
+        if (!matchUntagged && !matchTag) return false;
+      }
 
       if (!viewedPreset) return true;
 
@@ -1347,6 +1355,24 @@ export function MySkills() {
         {allTags.length > 0 && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />
+            {skills.some((s) => s.tags.length === 0) && (() => {
+              const isActive = tagFilters.has(UNTAGGED_FILTER);
+              return (
+                <button
+                  onClick={() => setTagFilters(toggleFilter(tagFilters, UNTAGGED_FILTER))}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    isActive
+                      ? "bg-surface-active text-primary"
+                      : "border border-dashed border-border text-muted hover:text-secondary"
+                  )}
+                  title={t("mySkills.tags.untagged")}
+                >
+                  <CircleSlash className="h-3 w-3" />
+                  {t("mySkills.tags.untagged")}
+                </button>
+              );
+            })()}
             {allTags.map((tag) => {
               const isActive = tagFilters.has(tag);
               return (
@@ -1861,6 +1887,8 @@ export function MySkills() {
         toolToggles={toolToggles}
         togglingTool={togglingToolKey}
         onToggleTool={handleToggleSkillTool}
+        projects={projects}
+        onProjectsChanged={refreshProjects}
       />
 
       <ConfirmDialog

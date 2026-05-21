@@ -667,3 +667,6 @@ export const importGlobalLocalSkillToCenter = (agent: string, skillRelativePath:
 
 export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePath: string) =>
   invoke<void>("update_global_local_skill_from_center", { agent, skillRelativePath });
+
+export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
+  invoke<void>("delete_global_local_skill", { agent, skillRelativePath });

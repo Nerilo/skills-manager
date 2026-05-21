@@ -1,44 +1,50 @@
-import { useState, useEffect } from "react";
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Layers, CheckCircle2, Bot, Plus, Download } from "lucide-react";
+import { Layers, CheckCircle2, Bot, Plus, Download, AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useApp } from "../context/AppContext";
-import * as api from "../lib/tauri";
-import type { ManagedSkill } from "../lib/tauri";
-import { getPresetIconOption } from "../lib/presetIcons";
 
 export function Dashboard() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { activePreset, tools, openSkillDetailById } = useApp();
-  const [skills, setSkills] = useState<ManagedSkill[]>([]);
+  const { tools, projects, managedSkills, openSkillDetailById } = useApp();
 
-  const installed = tools.filter((t) => t.installed).length;
-  const total = tools.length;
-  const synced = skills.filter((s) => s.targets.length > 0).length;
-  const presetIcon = getPresetIconOption(activePreset);
-  const PresetIcon = presetIcon.icon;
+  const enabledAgents = useMemo(
+    () => tools.filter((tool) => tool.installed && tool.enabled),
+    [tools]
+  );
 
-  useEffect(() => {
-    if (activePreset) {
-      api.getSkillsForPreset(activePreset.id).then(setSkills).catch(() => { });
-    }
-  }, [activePreset]);
+  const totalSkills = managedSkills.length;
+  const syncedSkills = useMemo(
+    () => managedSkills.filter((s) => s.targets.length > 0).length,
+    [managedSkills]
+  );
+
+  const divergedCount = useMemo(
+    () => projects.reduce((acc, p) => acc + p.sync_health.diverged, 0),
+    [projects]
+  );
+
+  const recentSkills = useMemo(
+    () => [...managedSkills].sort((a, b) => b.updated_at - a.updated_at).slice(0, 5),
+    [managedSkills]
+  );
+
+  const coverageLabel = totalSkills === 0 ? "0" : `${syncedSkills}/${totalSkills}`;
+  const syncCardIcon = divergedCount > 0 ? AlertTriangle : CheckCircle2;
+  const syncCardColor = divergedCount > 0 ? "text-amber-400" : "text-emerald-400";
+  const syncCardBg = divergedCount > 0 ? "bg-amber-500/[0.08]" : "bg-emerald-500/[0.08]";
 
   return (
     <div className="app-page app-page-narrow">
       <div className="app-page-header">
         <h1 className="app-page-title">{t("dashboard.greeting")}</h1>
-        <p className="app-page-subtitle flex items-center gap-2 flex-wrap text-tertiary">
-          {t("dashboard.currentPreset")}：
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[13px] font-medium ${presetIcon.activeClass} ${presetIcon.colorClass}`}
-          >
-            <PresetIcon className="h-3 w-3" />
-            {activePreset?.name || "—"}
-          </span>
-          <span className="text-faint">·</span>
-          <span>{t("dashboard.skillsEnabled", { count: skills.length })}</span>
+        <p className="app-page-subtitle text-tertiary">
+          {t("dashboard.summary", {
+            skills: totalSkills,
+            agents: enabledAgents.length,
+            projects: projects.length,
+          })}
         </p>
       </div>
 
@@ -46,25 +52,25 @@ export function Dashboard() {
       <div className="grid grid-cols-3 gap-3.5">
         {[
           {
-            title: t("dashboard.presetSkills"),
-            value: String(skills.length),
+            title: t("dashboard.librarySkills"),
+            value: String(totalSkills),
             icon: Layers,
             color: "text-accent-light",
             bg: "bg-accent-bg",
           },
           {
-            title: t("dashboard.synced"),
-            value: String(synced),
-            icon: CheckCircle2,
-            color: "text-emerald-400",
-            bg: "bg-emerald-500/[0.08]",
+            title: t("dashboard.syncCoverage"),
+            value: coverageLabel,
+            icon: syncCardIcon,
+            color: syncCardColor,
+            bg: syncCardBg,
           },
           {
-            title: t("dashboard.supportedAgents"),
-            value: `${installed}/${total}`,
+            title: t("dashboard.connectedAgents"),
+            value: String(enabledAgents.length),
             icon: Bot,
-            color: "text-amber-400",
-            bg: "bg-amber-500/[0.08]",
+            color: "text-sky-400",
+            bg: "bg-sky-500/[0.08]",
           },
         ].map((stat, i) => {
           const Icon = stat.icon;
@@ -106,13 +112,13 @@ export function Dashboard() {
       </div>
 
       {/* Recent skills */}
-      {skills.length > 0 && (
+      {recentSkills.length > 0 && (
         <div>
           <h2 className="app-section-title mb-2.5">
             {t("dashboard.recentActivity")}
           </h2>
           <div className="app-panel overflow-hidden divide-y divide-border-subtle">
-            {skills.slice(0, 5).map((skill) => (
+            {recentSkills.map((skill) => (
               <div
                 key={skill.id}
                 role="button"
@@ -142,8 +148,8 @@ export function Dashboard() {
                     </h4>
                     <p className="text-[13px] text-muted mt-px">
                       {skill.targets.length > 0
-                        ? `${t("dashboard.synced")} → ${skill.targets.map((t) => t.tool).join(", ")}`
-                        : "未同步"}
+                        ? `${t("dashboard.synced")} → ${skill.targets.map((target) => target.tool).join(", ")}`
+                        : t("dashboard.notSynced")}
                     </p>
                   </div>
                 </div>
